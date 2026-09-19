@@ -1,18 +1,18 @@
 # fzv
 
-`fzv` means `fuck zig version`, and you all know why. `fzv` could handle zig versions well.
+`fzv` means `fuck zig version`, and you know why. It manages zig versions.
 
 ```bash
-fzv get dev, stable -path path/to/save/zig     # 安装zig到指定的位置，当前会安装最新的dev和stable版本
-fzv get dev -j 4                # 用 4 条连接下载（默认 8，-j 1 就是单流）
-fzv use 0.16.0      # 切到 0.16.0（已开的终端、IDE、cargo / zig build 立刻用新版）
-fzv use dev         # 切到最新开发快照
-fzv lls             # 看看本机装了哪些版本
-fzv rm dev -yes                             # 删除
-fzv update                                  # 升级 fzv 自己（GitHub Release）
+fzv get dev, stable -path path/to/save/zig   # 把最新的 dev 和 stable 装到指定目录
+fzv get dev -j 4                             # 4 条连接下载（默认 8，-j 1 是单流）
+fzv use 0.16.0                               # 切到 0.16.0，开着的终端、IDE、cargo / zig build 立刻用新版
+fzv use dev                                  # 切到最新开发快照
+fzv lls                                      # 本机装了哪些版本
+fzv rm dev -yes                              # 删除
+fzv update                                   # 升级 fzv 自己（GitHub Release）
 ```
 
-**路径里的反斜杠会被某些 shell 吃掉**：bash / zsh / nushell 会把 `\P` 当转义删掉，写成单引号或正斜杠：
+路径里的反斜杠会被某些 shell 吃掉：bash / zsh / nushell 会把 `\P` 当转义删掉，写成单引号或正斜杠：
 
 ```bash
 fzv get dev -path 'D:\PL_Collections\zig'
@@ -21,23 +21,33 @@ fzv get dev -path D:/PL_Collections/zig
 
 ## 安装
 
-```powershell
-# PowerShell 一行装好（下载对应架构的 release，校验 SHA-256，解压并写进用户 PATH）
-irm https://github.com/ref42/fzv/releases/latest/download/install.ps1 | iex
+### 一、PowerShell 一行
 
-# 装完（新开终端也行），fzv 自己再把 zig 装到你指定的目录：
+```powershell
+irm https://github.com/ref42/fzv/releases/latest/download/install.ps1 | iex
+```
+
+下载对应架构的 release，校验 SHA-256，解压后写进用户 PATH。默认装在 `%LOCALAPPDATA%\Programs\fzv`，不需要管理员权限；换位置或从镜像装：
+
+```powershell
+.\install.ps1 -InstallDir D:\Tools\fzv -BaseUrl https://mirror.example/fzv
+```
+
+装完（新开终端也行），fzv 自己再把 zig 装到你指定的目录：
+
+```powershell
 fzv get dev, stable -path D:\zig
 ```
 
-```bash
-# 或者用 cargo 从源码安装
-cargo install --git https://github.com/ref42/fzv
+### 二、cargo
 
-# 或者从 Release 下载 fzv-v*-windows-x86_64.zip，把里面的 fzv.exe 放进任意一个已在 PATH 里的目录
+```bash
+cargo install --git https://github.com/ref42/fzv
 ```
 
-> `install.ps1` 默认装到 `%LOCALAPPDATA%\Programs\fzv`，不需要管理员权限；想换位置或从镜像装：
-> `.\install.ps1 -InstallDir D:\Tools\fzv -BaseUrl https://mirror.example/fzv`
+### 三、手动
+
+从 Release 下载 `fzv-v*-windows-x86_64.zip`，把里面的 `fzv.exe` 放进任意一个已在 PATH 里的目录。
 
 ## 命令
 
@@ -52,7 +62,7 @@ cargo install --git https://github.com/ref42/fzv
 | `fzv update [-force]` | 从 GitHub Release 升级 fzv 自身；`-force` 不管版本是否相同都重装 |
 | `fzv v` / `fzv h` | 版本 / 帮助 |
 
-## 选项（可选）
+## 选项
 
 | 选项 | 作用 |
 |---|---|
@@ -61,6 +71,3 @@ cargo install --git https://github.com/ref42/fzv
 | `-j N` | 每条归档的下载连接数，1–32，默认 8；`-j 1` 就是单流下载（`get`） |
 | `-verbose` | 连镜像选择、校验值、解压路径这些细节一起打印 |
 | `-force` | `update`：不管本地是不是最新，都重装一遍最新 release |
-
-
-
