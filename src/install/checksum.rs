@@ -5,6 +5,7 @@
 //! disk, only when the bytes match.
 
 use crate::error::{Result, err};
+use crate::log::detail;
 use std::fs;
 use std::path::Path;
 
@@ -12,7 +13,7 @@ use std::path::Path;
 /// index. Mirrors are third-party servers, so this is what makes them usable.
 pub fn verify_sha256(path: &Path, expected: Option<&str>) -> Result<()> {
     let Some(expected) = expected else {
-        eprintln!(
+        detail!(
             "fzv: no published checksum for {}; skipping verification",
             path.file_name()
                 .map(|name| name.to_string_lossy().into_owned())
@@ -27,11 +28,12 @@ pub fn verify_sha256(path: &Path, expected: Option<&str>) -> Result<()> {
             path.display()
         ));
     }
-    eprintln!("fzv: checksum verified ({})", &actual[..16]);
+    detail!("fzv: checksum verified ({})", &actual[..16]);
     Ok(())
 }
 
-fn sha256_file(path: &Path) -> Result<String> {
+/// The SHA-256 of a file, in lower-case hex.
+pub fn sha256_file(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
 

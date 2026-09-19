@@ -11,6 +11,7 @@ use crate::error::{Result, err};
 use crate::index;
 use crate::install;
 use crate::installed;
+use crate::log::detail;
 use crate::platform;
 
 pub fn run(options: &Options) -> Result<()> {
@@ -36,7 +37,11 @@ pub fn run(options: &Options) -> Result<()> {
                 .map(|version| version.as_str().to_string())
                 .collect();
             let picked = prompt::choose("Use Zig version", &names, false)?;
-            match picked.first().and_then(|name| selectable.into_iter().find(|version| version.as_str() == name)) {
+            match picked.first().and_then(|name| {
+                selectable
+                    .into_iter()
+                    .find(|version| version.as_str() == name)
+            }) {
                 Some(version) => version,
                 None => return Ok(()),
             }
@@ -46,8 +51,11 @@ pub fn run(options: &Options) -> Result<()> {
     let executable = install::ensure_zig(&root, &version)?;
     let zls = install::ensure_zls(&root)?;
     let activation = platform::activate(&root, &version)?;
-    cli::report_activation(&version, &activation);
-    println!("zig executable: {}", executable.display());
-    println!("zls executable: {}", zls.display());
+    cli::report_activation(&version, &activation, options.print_path);
+    detail!("fzv: zig executable: {}", executable.display());
+    detail!("fzv: zls executable: {}", zls.display());
+    if options.print_path {
+        cli::report_session_path(&root);
+    }
     Ok(())
 }

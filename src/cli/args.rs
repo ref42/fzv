@@ -21,6 +21,11 @@ pub struct Options {
     pub path: Option<PathBuf>,
     /// `--yes`: skip a confirmation prompt.
     pub yes: bool,
+    /// `--force`: install even when there is nothing newer to install.
+    pub force: bool,
+    /// `--print-path`: print the `PATH` value for the current shell on stdout,
+    /// so the selection takes effect without restarting the terminal.
+    pub print_path: bool,
 }
 
 impl Options {
@@ -37,10 +42,21 @@ impl Options {
                     options.path = Some(parse_directory_argument(value)?);
                 }
                 "--yes" | "-y" => options.yes = true,
+                "--force" | "-f" => options.force = true,
+                "--print-path" => options.print_path = true,
                 value if value.starts_with('-') => {
                     return Err(err!("unknown option '{value}'"));
                 }
-                value => options.positionals.push(value.to_string()),
+                // Selectors may be separated by spaces or commas, so both
+                // `fzv get dev stable` and `fzv get dev,stable` work. Version
+                // strings never contain a comma, so splitting is safe.
+                value => options.positionals.extend(
+                    value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|part| !part.is_empty())
+                        .map(str::to_string),
+                ),
             }
             index += 1;
         }
@@ -97,14 +113,56 @@ mod tests {
 
         let args: Vec<String> = ["--yes"].iter().map(|part| part.to_string()).collect();
         assert!(Options::parse(&args).unwrap().yes);
+
+        let args: Vec<String> = ["update", "--force"]
+            .iter()
+            .map(|part| part.to_string())
+            .collect();
+        let options = Options::parse(&args).unwrap();
+        assert!(options.force && !options.yes);
+        assert_eq!(options.positionals, ["update"]);
+        assert!(Options::parse(&["-f".to_string()]).unwrap().force);
+
+        let args: Vec<String> = ["use", "0.16.0", "--print-path"]
+            .iter()
+            .map(|part| part.to_string())
+            .collect();
+        let options = Options::parse(&args).unwrap();
+        assert!(options.print_path);
+        assert_eq!(options.positionals, ["use", "0.16.0"]);
+    }
+
+    #[test]
+    fn accepts_comma_or_space_separated_selectors() {
+        let selectors = |args: &[&str]| -> Vec<String> {
+            let args: Vec<String> = args.iter().map(|part| part.to_string()).collect();
+            Options::parse(&args).unwrap().positionals
+        };
+        assert_eq!(selectors(&["dev", "stable"]), ["dev", "stable"]);
+        assert_eq!(selectors(&["dev,stable"]), ["dev", "stable"]);
+        assert_eq!(selectors(&[" dev , stable "]), ["dev", "stable"]);
+        assert_eq!(selectors(&["0.16.0,"]), ["0.16.0"]);
+        assert_eq!(selectors(&["0.16.0"]), ["0.16.0"]);
+        // The `--path` value is never split.
+        assert_eq!(selectors(&["dev", "--path", r"D:\a,b\zig"]), ["dev"]);
     }
 
     #[test]
     fn rejects_unknown_options_and_missing_values() {
         let args: Vec<String> = ["--nope"].iter().map(|part| part.to_string()).collect();
-        assert!(Options::parse(&args).unwrap_err().to_string().contains("unknown option"));
+        assert!(
+            Options::parse(&args)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown option")
+        );
         let args: Vec<String> = ["--path"].iter().map(|part| part.to_string()).collect();
-        assert!(Options::parse(&args).unwrap_err().to_string().contains("requires a directory"));
+        assert!(
+            Options::parse(&args)
+                .unwrap_err()
+                .to_string()
+                .contains("requires a directory")
+        );
     }
 
     #[test]
@@ -115,7 +173,10 @@ mod tests {
 
         // A relative path gets a plain error, without the shell lecture.
         let error = parse_directory_argument("zig-versions").unwrap_err();
-        assert!(error.to_string().contains("not an absolute path"), "{error}");
+        assert!(
+            error.to_string().contains("not an absolute path"),
+            "{error}"
+        );
         assert!(!error.to_string().contains("Quote the value"), "{error}");
         assert!(parse_directory_argument("   ").is_err());
     }

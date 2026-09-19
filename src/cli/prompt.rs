@@ -11,7 +11,9 @@ pub fn confirm(message: &str) -> Result<bool> {
     print!("{message} [y/N] ");
     io::Write::flush(&mut io::stdout()).map_err(crate::error::Error::from)?;
     let mut answer = String::new();
-    io::stdin().read_line(&mut answer).map_err(crate::error::Error::from)?;
+    io::stdin()
+        .read_line(&mut answer)
+        .map_err(crate::error::Error::from)?;
     Ok(matches!(
         answer.trim().to_ascii_lowercase().as_str(),
         "y" | "yes"
@@ -38,7 +40,9 @@ pub fn choose(title: &str, items: &[String], multi: bool) -> Result<Vec<String>>
     io::Write::flush(&mut io::stdout()).map_err(crate::error::Error::from)?;
 
     let mut answer = String::new();
-    io::stdin().read_line(&mut answer).map_err(crate::error::Error::from)?;
+    io::stdin()
+        .read_line(&mut answer)
+        .map_err(crate::error::Error::from)?;
     let answer = answer.trim();
     if answer.eq_ignore_ascii_case("q") || answer.eq_ignore_ascii_case("cancel") {
         return Ok(Vec::new());

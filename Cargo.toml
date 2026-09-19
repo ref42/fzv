@@ -2,11 +2,17 @@
 name = "fzv"
 version = "0.1.0"
 edition = "2024"
+description = "Manage Zig versions by pointing a single PATH entry at the one you want"
+authors = ["ref42 <ybinlew@gmail.com>"]
 
 [dependencies]
+indicatif = "0.18.6"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "stream"] }
 sha2 = "0.11.0"
 tokio = { version = "1.53.1", features = ["fs", "io-util", "rt-multi-thread", "time"] }
 winreg = "0.56.0"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
+[dev-dependencies]
+# `in_memory` renders a bar into a buffer, which is how the display is tested.
+indicatif = { version = "0.18.6", features = ["in_memory"] }

@@ -138,6 +138,19 @@ pub fn looks_like_fzv_zig_dir(entry: &str, style: PathStyle) -> bool {
     is_absolute(&text, style) && is_version_dir_name(&path_key(&text, style))
 }
 
+/// Whether a `PATH` value reaches `directory`.
+///
+/// Entries are compared with [`path_key`], so `D:/zig`, `D:\zig` and
+/// `D:\ZIG` are the same directory, and a trailing separator does not matter.
+pub fn contains_entry(value: &str, directory: &Path, style: PathStyle) -> bool {
+    let wanted = path_key(&strip_verbatim(&directory.to_string_lossy(), style), style);
+    value
+        .split(style.separator)
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .any(|entry| path_key(&strip_verbatim(entry, style), style) == wanted)
+}
+
 /// The first entry of a `PATH` value that is one of fzv's Zig directories.
 ///
 /// `is_fzv_dir` decides whether a candidate directory really is one of fzv's
@@ -238,12 +251,7 @@ pub fn rewrite_path(
 
 /// The entries of `old` that [`rewrite_path`] would drop, so a caller can report
 /// them instead of removing them silently.
-pub fn dropped_entries(
-    old: &str,
-    new: &str,
-    wanted: &[&Path],
-    style: PathStyle,
-) -> Vec<String> {
+pub fn dropped_entries(old: &str, new: &str, wanted: &[&Path], style: PathStyle) -> Vec<String> {
     let new_keys: Vec<String> = new
         .split(style.separator)
         .map(|entry| path_key(entry, style))
@@ -280,6 +288,36 @@ mod tests {
     /// it holds one of the executables fzv installs.
     fn holds_executable(root: &Path) -> bool {
         root.join("zig.exe").is_file() || root.join("zls.exe").is_file()
+    }
+
+    #[test]
+    fn recognises_a_directory_inside_a_path_value() {
+        let value = r"D:\zig; C:\tools;D:/other/";
+        assert!(contains_entry(value, Path::new(r"D:\zig"), windows()));
+        assert!(contains_entry(value, Path::new(r"D:\ZIG"), windows()));
+        assert!(contains_entry(value, Path::new("D:/zig"), windows()));
+        assert!(contains_entry(value, Path::new(r"C:\tools"), windows()));
+        assert!(contains_entry(value, Path::new("D:/other"), windows()));
+        assert!(!contains_entry(value, Path::new(r"D:\zigs"), windows()));
+        assert!(!contains_entry(value, Path::new(r"D:\missing"), windows()));
+        assert!(!contains_entry("", Path::new(r"D:\zig"), windows()));
+        // A quoted entry is the same directory.
+        assert!(contains_entry(
+            r#""C:\Program Files\bin";D:\zig"#,
+            Path::new(r"C:\Program Files\bin"),
+            windows()
+        ));
+        // The separator follows the style, not the host.
+        assert!(contains_entry(
+            "/opt/zig:/usr/bin",
+            Path::new("/opt/zig"),
+            unix()
+        ));
+        assert!(!contains_entry(
+            "/opt/zig:/usr/bin",
+            Path::new("/opt/zig"),
+            windows()
+        ));
     }
 
     fn temp_dir(label: &str) -> PathBuf {
@@ -358,7 +396,10 @@ mod tests {
         assert!(!is_version_dir_name(&path_key(r"D:\zig", windows())));
         assert!(!is_version_dir_name(&path_key(r"D:\zig\zls", windows())));
         assert!(!is_version_dir_name(&path_key(r"D:\zig\0.14", windows())));
-        assert!(!is_version_dir_name(&path_key(r"D:\zig\0.14.1\bin", windows())));
+        assert!(!is_version_dir_name(&path_key(
+            r"D:\zig\0.14.1\bin",
+            windows()
+        )));
         assert!(is_version_dir_name(&path_key("/home/u/zig/0.14.1", unix())));
 
         assert!(is_zls_dir_name(&path_key(r"D:\zig\zls", windows())));
@@ -405,7 +446,11 @@ mod tests {
         );
         // A verbatim entry (written by an older fzv build) still resolves.
         assert_eq!(
-            zig_dir_in_path(&format!(r"\\?\{}", zig_dir.display()), style, holds_executable),
+            zig_dir_in_path(
+                &format!(r"\\?\{}", zig_dir.display()),
+                style,
+                holds_executable
+            ),
             Some(zig_dir)
         );
         // Only the ZLS directory: no active Zig version.
@@ -469,7 +514,11 @@ mod tests {
         // Both entries of the previous root (a version and its ZLS) are gone.
         assert!(!new.contains("0.13.0"), "{new}");
         assert!(!new.contains("0.14.0"), "{new}");
-        assert_eq!(new.matches(&old_root.join("zls").display().to_string()).count(), 0);
+        assert_eq!(
+            new.matches(&old_root.join("zls").display().to_string())
+                .count(),
+            0
+        );
 
         // Removing the active selection clears both entries.
         let cleared = rewrite_path(&new, &new_root, &[], style, holds_executable);
@@ -486,7 +535,10 @@ mod tests {
 
         // A whole volume cannot be prefix-matched, so only recognised entries go.
         let volume = rewrite_path(&old, Path::new(r"D:\"), &wanted, style, holds_executable);
-        assert!(volume.contains("ninja"), "{volume} dropped an unrelated entry");
+        assert!(
+            volume.contains("ninja"),
+            "{volume} dropped an unrelated entry"
+        );
         assert!(
             volume.contains(&base.join("other").display().to_string()),
             "{volume}"

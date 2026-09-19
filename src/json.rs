@@ -40,6 +40,13 @@ impl Value {
         }
     }
 
+    pub fn as_array(&self) -> Option<&[Value]> {
+        match self {
+            Value::Array(items) => Some(items),
+            _ => None,
+        }
+    }
+
     /// The keys of an object, in sorted order.
     pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.as_object()
@@ -156,7 +163,9 @@ impl Parser {
             match self.bump() {
                 Some(',') => continue,
                 Some('}') => break,
-                Some(found) => return Err(self.error(&format!("expected ',' or '}}', found '{found}'"))),
+                Some(found) => {
+                    return Err(self.error(&format!("expected ',' or '}}', found '{found}'")));
+                }
                 None => return Err(self.error("unterminated object")),
             }
         }
@@ -181,7 +190,9 @@ impl Parser {
             match self.bump() {
                 Some(',') => continue,
                 Some(']') => break,
-                Some(found) => return Err(self.error(&format!("expected ',' or ']', found '{found}'"))),
+                Some(found) => {
+                    return Err(self.error(&format!("expected ',' or ']', found '{found}'")));
+                }
                 None => return Err(self.error("unterminated array")),
             }
         }
@@ -282,11 +293,14 @@ mod tests {
         assert_eq!(value.get("d"), Some(&Value::Bool(true)));
         assert_eq!(value.get("e"), Some(&Value::Null));
         let array = value.get("a").unwrap().get("b").unwrap();
-        assert_eq!(array, &Value::Array(vec![
-            Value::Number("1".into()),
-            Value::Number("2".into()),
-            object(&[("c", Value::String("x".into()))]),
-        ]));
+        assert_eq!(
+            array,
+            &Value::Array(vec![
+                Value::Number("1".into()),
+                Value::Number("2".into()),
+                object(&[("c", Value::String("x".into()))]),
+            ])
+        );
     }
 
     #[test]
@@ -331,6 +345,9 @@ mod tests {
     fn keeps_large_integers_exact() {
         let value = parse(r#"{"size": 82229343}"#).unwrap();
         assert_eq!(value.string_at("size"), None);
-        assert_eq!(value.get("size").unwrap(), &Value::Number("82229343".into()));
+        assert_eq!(
+            value.get("size").unwrap(),
+            &Value::Number("82229343".into())
+        );
     }
 }

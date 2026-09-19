@@ -28,9 +28,9 @@ pub fn executable_name(name: &str) -> String {
 }
 
 fn find_at(directory: &Path, wanted: &str, depth: usize) -> Result<PathBuf> {
-    for entry in std::fs::read_dir(directory).map_err(|error| {
-        err!("unable to read {}: {error}", directory.display())
-    })? {
+    for entry in std::fs::read_dir(directory)
+        .map_err(|error| err!("unable to read {}: {error}", directory.display()))?
+    {
         let entry = entry.map_err(|error| err!("unable to read an entry: {error}"))?;
         let path = entry.path();
         if path.file_name().and_then(|name| name.to_str()) == Some(wanted) {

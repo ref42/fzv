@@ -47,12 +47,15 @@ pub fn run(options: &Options) -> Result<()> {
     install::ensure_zls(&root)?;
     for version in &selected {
         install::ensure_zig(&root, version)?;
-        println!("installed {version}");
+        eprintln!("installed {version}");
     }
 
     if options.path.is_some() {
         let activation = platform::activate(&root, &selected[0])?;
-        cli::report_activation(&selected[0], &activation);
+        cli::report_activation(&selected[0], &activation, options.print_path);
+        if options.print_path {
+            cli::report_session_path(&root);
+        }
     }
     Ok(())
 }

@@ -22,9 +22,8 @@ pub fn is_versions_root(root: &Path) -> bool {
 /// The state directory for `root`, creating it on demand.
 pub fn state_dir(root: &Path) -> Result<PathBuf> {
     let directory = root.join(STATE_DIR);
-    std::fs::create_dir_all(&directory).map_err(|error| {
-        err!("unable to create {}: {error}", directory.display())
-    })?;
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| err!("unable to create {}: {error}", directory.display()))?;
     Ok(directory)
 }
 
@@ -33,12 +32,42 @@ pub fn index_cache(root: &Path) -> Result<PathBuf> {
     Ok(state_dir(root)?.join("download-index.json"))
 }
 
+/// The directory holding the `zig`/`zls` shims for `root`.
+///
+/// It is the only fzv entry in `PATH` once shims are installed, which is why it
+/// lives under the versions directory: switching versions then never touches
+/// `PATH` again.
+pub fn shim_dir(root: &Path) -> PathBuf {
+    root.join(STATE_DIR).join("bin")
+}
+
+/// The file recording the active version while shims are installed.
+pub fn active_file(root: &Path) -> PathBuf {
+    root.join(STATE_DIR).join("active")
+}
+
+/// Marks that the "this terminal predates the `PATH` entry" hint was shown for
+/// `root`, returning whether it is due.
+///
+/// A process cannot change its parent's environment, so the hint is worth
+/// showing exactly once per versions directory; on every later command it would
+/// only be noise.
+pub fn session_hint_once(root: &Path) -> bool {
+    let marker = root.join(STATE_DIR).join("session-hint");
+    if marker.is_file() {
+        return false;
+    }
+    // If the marker cannot be written the hint may repeat, which is a far
+    // smaller problem than failing an otherwise successful command.
+    let _ = std::fs::write(&marker, b"shown\n");
+    true
+}
+
 /// The install lock file for one target (a version, or `zls`).
 pub fn lock_file(root: &Path, name: &str) -> Result<PathBuf> {
     let directory = state_dir(root)?.join("locks");
-    std::fs::create_dir_all(&directory).map_err(|error| {
-        err!("unable to create {}: {error}", directory.display())
-    })?;
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| err!("unable to create {}: {error}", directory.display()))?;
     Ok(directory.join(format!("{}.lock", sanitize_name(name))))
 }
 
@@ -70,9 +99,30 @@ mod tests {
         let lock = lock_file(&root, "0.14.1").unwrap();
         assert_eq!(lock.file_name().unwrap(), "0.14.1.lock");
         assert_eq!(
-            lock_file(&root, "0.14.1/../x").unwrap().file_name().unwrap(),
+            lock_file(&root, "0.14.1/../x")
+                .unwrap()
+                .file_name()
+                .unwrap(),
             "0.14.1_.._x.lock"
         );
+        // The shim mode files stay inside the state directory too.
+        assert!(shim_dir(&root).ends_with(Path::new(STATE_DIR).join("bin")));
+        assert!(active_file(&root).ends_with(Path::new(STATE_DIR).join("active")));
+        assert!(shim_dir(&root).starts_with(&root));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_session_hint_is_due_only_once() {
+        let root = std::env::temp_dir().join(format!("fzv-hint-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        state_dir(&root).unwrap();
+        assert!(session_hint_once(&root));
+        assert!(!session_hint_once(&root));
+        // A second versions directory has its own answer.
+        let other = root.join("other");
+        state_dir(&other).unwrap();
+        assert!(session_hint_once(&other));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

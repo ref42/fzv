@@ -54,12 +54,9 @@ pub fn run(options: &Options) -> Result<()> {
     for name in names {
         let directory = root.join(&name);
         if !directory.is_dir() {
-            return Err(err!(
-                "Zig {name} is not installed in {}",
-                root.display()
-            ));
+            return Err(err!("Zig {name} is not installed in {}", root.display()));
         }
-        let was_active = cli::is_active_version(&directory);
+        let was_active = cli::is_active_version(&root, &directory);
         std::fs::remove_dir_all(&directory)
             .map_err(|error| err!("unable to remove {}: {error}", directory.display()))?;
         if was_active {

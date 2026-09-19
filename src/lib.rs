@@ -14,19 +14,28 @@
 //!     layout.rs        finding and flattening an installed executable
 //!     version.rs       the Version type (parsing and ordering)
 //!     platform.rs      Windows integration: the user PATH in the registry
+//!     shim.rs          shim mode: instant switching without touching PATH
+//!     update.rs        replacing fzv itself from its GitHub releases
 //!     path_util.rs     pure PATH rewriting rules
-//!     download/        HTTP transport, mirrors, progress
+//!     download/        HTTP transport, mirrors
+//!     progress.rs      the progress bar and spinner (indicatif)
 //!     store.rs         where fzv's own files live
 //!     json.rs          a small JSON reader
+//!     log.rs           what is printed by default, and what needs `FZV_VERBOSE`
 //!     error.rs         Error / Result
 //! ```
 //!
 //! # The one invariant
 //!
-//! The active version *is* the Zig directory in `HKCU\Environment\Path`: `fzv use`
-//! replaces that single entry with `<versions>\<version>`. Nothing else records
-//! the selection, so fzv cannot drift out of sync with the shell, and every fzv
-//! file lives inside the versions directory (`<versions>\.fzv`).
+//! The active version is derived from `PATH`, never from a state file of fzv's
+//! own. `PATH` holds the single stable directory `<versions>\.fzv\bin`, whose
+//! `zig`/`zls` shims ([`shim`]) follow the version recorded in
+//! `<versions>\.fzv\active` - so switching takes effect immediately in every
+//! running terminal and never touches `PATH` again.
+//!
+//! Every file fzv keeps for a versions directory lives inside it; the only files
+//! it writes elsewhere are the pair of shims next to the launcher executable
+//! ([`shim`]), which is what lets the terminal that ran fzv use them right away.
 
 pub mod cli;
 pub mod download;
@@ -36,9 +45,13 @@ pub mod install;
 pub mod installed;
 pub mod json;
 pub mod layout;
+pub mod log;
 pub mod path_util;
 pub mod platform;
+pub(crate) mod progress;
+pub mod shim;
 pub mod store;
+pub mod update;
 pub mod version;
 
 use std::path::{Path, PathBuf};
@@ -86,7 +99,10 @@ mod tests {
     #[test]
     fn recognises_shim_names() {
         assert_eq!(tool_name(Path::new("/usr/bin/zig")).as_deref(), Some("zig"));
-        assert_eq!(tool_name(Path::new("C:\\tools\\ZIG.EXE")).as_deref(), Some("zig"));
+        assert_eq!(
+            tool_name(Path::new("C:\\tools\\ZIG.EXE")).as_deref(),
+            Some("zig")
+        );
         assert_eq!(tool_name(Path::new("/usr/bin/zls")).as_deref(), Some("zls"));
         assert_eq!(tool_name(Path::new("/usr/bin/fzv")), None);
     }

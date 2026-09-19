@@ -13,6 +13,7 @@
 
 use crate::error::{Result, err};
 use crate::json;
+use crate::log::detail;
 use crate::store;
 use crate::version::{Version, sort_desc};
 use std::path::Path;
@@ -62,7 +63,7 @@ impl Index {
                 Ok(()) => return std::fs::read_to_string(&path).map_err(crate::error::Error::from),
                 Err(error) => match cached {
                     Some(text) => {
-                        eprintln!("fzv: using the cached download index ({error})");
+                        detail!("fzv: using the cached download index ({error})");
                         return Ok(text);
                     }
                     None => return Err(error),
@@ -84,11 +85,7 @@ impl Index {
     /// Every published version, newest first, including the master snapshot
     /// (which the index only names inside its `master` entry).
     pub fn available(&self) -> Vec<Version> {
-        let mut versions: Vec<Version> = self
-            .document
-            .keys()
-            .filter_map(Version::parse)
-            .collect();
+        let mut versions: Vec<Version> = self.document.keys().filter_map(Version::parse).collect();
         if let Some(master) = self.master_version() {
             versions.push(master);
         }
@@ -101,12 +98,11 @@ impl Index {
     /// Resolves `latest`, `stable`, `master`, `dev` or an exact version.
     pub fn resolve(&self, selector: &str) -> Result<Version> {
         match selector {
-            "latest" | "master" | "dev" => self.master_version().ok_or_else(|| {
-                err!("the download index has no valid master version")
-            }),
+            "latest" | "master" | "dev" => self
+                .master_version()
+                .ok_or_else(|| err!("the download index has no valid master version")),
             "stable" => self.stable_version(),
-            value => Version::parse(value)
-                .ok_or_else(|| err!("invalid Zig version '{value}'")),
+            value => Version::parse(value).ok_or_else(|| err!("invalid Zig version '{value}'")),
         }
     }
 
@@ -158,9 +154,16 @@ impl Index {
     }
 }
 
-/// Resolves a selector, loading the index only when it is needed.
+/// Resolves a selector, loading the index only for the channel selectors.
+///
+/// An exact version needs no index at all, which keeps `fzv use 0.16.0` (and
+/// `fzv get 0.16.0`) working without a network connection when the version is
+/// already installed.
 pub fn resolve_selector(selector: &str, root: Option<&Path>) -> Result<Version> {
-    Index::load(root)?.resolve(selector)
+    match selector {
+        "latest" | "master" | "dev" | "stable" => Index::load(root)?.resolve(selector),
+        value => Version::parse(value).ok_or_else(|| err!("invalid Zig version '{value}'")),
+    }
 }
 
 /// Everything needed to fetch one archive, preferring the index because it also
@@ -177,12 +180,12 @@ pub fn download_info(version: &Version, root: &Path) -> Result<Archive> {
             if let Some(archive) = index.archive(version)? {
                 return Ok(archive);
             }
-            eprintln!(
+            detail!(
                 "fzv: the download index does not describe Zig {version} for {platform}; deriving the archive URL (no checksum available)"
             );
         }
         Err(error) => {
-            eprintln!(
+            detail!(
                 "fzv: unable to read the download index ({error}); deriving the archive URL (no checksum available)"
             );
         }
@@ -280,7 +283,10 @@ mod tests {
             index.resolve("latest").unwrap().as_str(),
             "0.17.0-dev.2228+955228b68"
         );
-        assert_eq!(index.resolve("master").unwrap().as_str(), "0.17.0-dev.2228+955228b68");
+        assert_eq!(
+            index.resolve("master").unwrap().as_str(),
+            "0.17.0-dev.2228+955228b68"
+        );
         assert_eq!(index.resolve("stable").unwrap().as_str(), "0.14.1");
         assert_eq!(index.resolve("0.13.0").unwrap().as_str(), "0.13.0");
         assert!(index.resolve("nope").is_err());
@@ -313,7 +319,10 @@ mod tests {
         let (url, archive) =
             constructed_archive(&Version::parse("0.13.0").unwrap(), "x86_64-windows").unwrap();
         assert_eq!(archive, "zig-windows-x86_64-0.13.0.zip");
-        assert_eq!(url, format!("https://ziglang.org/download/0.13.0/{archive}"));
+        assert_eq!(
+            url,
+            format!("https://ziglang.org/download/0.13.0/{archive}")
+        );
 
         let (_, archive) =
             constructed_archive(&Version::parse("0.14.1").unwrap(), "x86_64-windows").unwrap();

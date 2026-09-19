@@ -6,12 +6,13 @@
 //! filling the disk.
 
 use crate::error::{Error, Result, err};
+use crate::log::detail;
 use std::fs;
 use std::io;
 use std::path::Path;
 
 pub fn extract_archive(archive: &Path, destination: &Path) -> Result<()> {
-    eprintln!("fzv: extracting {}...", archive.display());
+    detail!("fzv: extracting {}...", archive.display());
     fs::create_dir_all(destination).map_err(Error::from)?;
     let mut budget = ExtractBudget::default();
     extract_zip(archive, destination, &mut budget)
@@ -43,8 +44,8 @@ impl ExtractBudget {
 
 fn extract_zip(archive: &Path, destination: &Path, budget: &mut ExtractBudget) -> Result<()> {
     let file = fs::File::open(archive).map_err(Error::from)?;
-    let mut zip = zip::ZipArchive::new(file)
-        .map_err(|error| err!("unable to open ZIP archive: {error}"))?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|error| err!("unable to open ZIP archive: {error}"))?;
     for index in 0..zip.len() {
         let mut entry = zip
             .by_index(index)
@@ -106,7 +107,10 @@ mod tests {
         extract_archive(&archive, &out).unwrap();
         let prefix = out.join("zig-x86_64-windows-0.0.1-test");
         assert_eq!(fs::read(prefix.join("zig.exe")).unwrap(), b"exe");
-        assert_eq!(fs::read(prefix.join("lib").join("std.bin")).unwrap(), b"lib");
+        assert_eq!(
+            fs::read(prefix.join("lib").join("std.bin")).unwrap(),
+            b"lib"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -1,2 +1,7 @@
+# `fzv` is a small CLI, so the release binary is built for size.
+#
+# `-Z embed-metadata=no` drops the rustc metadata section that a binary never
+# needs at run time. It is a nightly flag, so the build needs a nightly
+# toolchain.
 [build]
 rustflags = ["-Z", "embed-metadata=no"]

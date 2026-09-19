@@ -19,7 +19,7 @@ pub fn run(options: &Options) -> Result<()> {
     }
     for installed in versions {
         let mut markers = Vec::new();
-        if cli::is_active_version(&installed.directory(&root)) {
+        if cli::is_active_version(&root, &installed.directory(&root)) {
             markers.push("active");
         }
         if !installed.ready {

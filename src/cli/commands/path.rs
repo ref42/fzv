@@ -18,7 +18,11 @@ pub fn run(options: &Options) -> Result<()> {
         return Ok(());
     };
     println!("versions directory: {}", root.display());
-    match cli::active_version_dir() {
+    println!(
+        "shim directory: {}",
+        crate::store::shim_dir(&root).display()
+    );
+    match cli::active_version_dir(&root) {
         Some(directory) => println!("active version: {}", directory.display()),
         None => println!("active version: none (PATH has no fzv Zig directory)"),
     }

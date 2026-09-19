@@ -12,7 +12,9 @@ pub mod checksum;
 use crate::error::{Result, err};
 use crate::index;
 use crate::layout;
+use crate::log::detail;
 use crate::platform;
+use crate::progress::Spinner;
 use crate::store;
 use crate::version::Version;
 use std::path::{Path, PathBuf};
@@ -39,7 +41,7 @@ pub fn ensure_zig(root: &Path, version: &Version) -> Result<PathBuf> {
         .map_err(|error| err!("unable to create {}: {error}", directory.display()))?;
     let archive_path = directory.join(&archive.file_name);
     if archive_path.is_file() {
-        eprintln!("fzv: reusing downloaded Zig archive");
+        detail!("fzv: reusing downloaded Zig archive");
         if let Err(error) = verify_sha256(&archive_path, archive.sha256.as_deref()) {
             eprintln!("fzv: {error}; downloading it again");
             std::fs::remove_file(&archive_path)
@@ -47,14 +49,14 @@ pub fn ensure_zig(root: &Path, version: &Version) -> Result<PathBuf> {
         }
     }
     if !archive_path.is_file() {
-        eprintln!("fzv: downloading Zig {version}...");
-        crate::download::download(&archive.url, &archive_path)?;
+        crate::download::download(&archive.url, &archive_path, &format!("Zig {version}"))?;
         if let Err(error) = verify_sha256(&archive_path, archive.sha256.as_deref()) {
             // Never leave bytes that failed verification behind.
             let _ = std::fs::remove_file(&archive_path);
             return Err(error);
         }
     }
+    let _unpacking = Spinner::start(&format!("unpacking Zig {version}"));
     archive::extract_archive(&archive_path, &directory)?;
     let extracted = layout::find_zig_executable(&directory)?;
     let _ = std::fs::remove_file(&archive_path);
@@ -89,10 +91,10 @@ pub fn ensure_zls(root: &Path) -> Result<PathBuf> {
     if !archive_path.is_file() {
         // ZLS releases do not publish a checksum, so this download cannot be
         // verified the way Zig archives are.
-        eprintln!("fzv: downloading ZLS (no published checksum; not verifying)...");
+        detail!("fzv: downloading ZLS (no published checksum; not verifying)");
         let mut last_error = None;
         for attempt in 1..=3 {
-            match crate::download::download(&url, &archive_path) {
+            match crate::download::download(&url, &archive_path, "ZLS") {
                 Ok(()) => break,
                 Err(error) => {
                     if attempt < 3 {
@@ -110,6 +112,7 @@ pub fn ensure_zls(root: &Path) -> Result<PathBuf> {
             return Err(err!("unable to download ZLS after 3 attempts: {error}"));
         }
     }
+    let _unpacking = Spinner::start("unpacking ZLS");
     archive::extract_archive(&archive_path, &directory)?;
     let extracted = layout::find_named_executable(&directory, "zls")?;
     let _ = std::fs::remove_file(archive_path);
@@ -132,9 +135,8 @@ impl InstallLock {
             .truncate(false)
             .open(&path)
             .map_err(|error| err!("unable to open {}: {error}", path.display()))?;
-        file.try_lock().map_err(|error| {
-            err!("another fzv process is already installing {name} ({error})")
-        })?;
+        file.try_lock()
+            .map_err(|error| err!("another fzv process is already installing {name} ({error})"))?;
         Ok(InstallLock { file, path })
     }
 }
@@ -188,7 +190,10 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let executable = platform::zig_executable_in(&directory);
         std::fs::write(&executable, b"exe").unwrap();
-        assert_eq!(ensure_zig(&root, &Version::parse("0.14.1").unwrap()).unwrap(), executable);
+        assert_eq!(
+            ensure_zig(&root, &Version::parse("0.14.1").unwrap()).unwrap(),
+            executable
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -103,8 +103,7 @@ impl fmt::Display for Version {
 /// build hash apart) stay deterministic through the string comparison.
 impl Ord for Version {
     fn cmp(&self, other: &Version) -> Ordering {
-        self.semver_cmp(other)
-            .then_with(|| self.0.cmp(&other.0))
+        self.semver_cmp(other).then_with(|| self.0.cmp(&other.0))
     }
 }
 
@@ -195,7 +194,10 @@ mod tests {
     fn orders_versions_numerically() {
         assert_eq!(version("0.14.1").cmp(&version("0.14.1")), Ordering::Equal);
         assert_eq!(version("0.9.1").cmp(&version("0.14.1")), Ordering::Less);
-        assert_eq!(version("0.14.10").cmp(&version("0.14.9")), Ordering::Greater);
+        assert_eq!(
+            version("0.14.10").cmp(&version("0.14.9")),
+            Ordering::Greater
+        );
         assert_eq!(
             version("0.14.0-dev.999").cmp(&version("0.14.0-dev.1000")),
             Ordering::Less
