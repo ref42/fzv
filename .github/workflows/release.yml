@@ -28,10 +28,10 @@ jobs:
         include:
           - os: windows-2025-vs2026
             target: x86_64-pc-windows-msvc
-            asset_suffix: windows-x86_64
+            arch: x86_64
           - os: windows-11-vs2026-arm
             target: aarch64-pc-windows-msvc
-            asset_suffix: windows-aarch64
+            arch: aarch64
 
     steps:
       - name: Checkout release tag
@@ -62,37 +62,50 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          $name = "fzv-$env:RELEASE_TAG-${{ matrix.asset_suffix }}"
-          $bin = "target\${{ matrix.target }}\release\fzv.exe"
-          $assets = New-Object System.Collections.Generic.List[string]
-
-          # A bare executable, for anyone who wants to drop it in place by hand.
-          $raw = "$name.exe"
-          Copy-Item $bin $raw -Force
-          $assets.Add($raw)
-
-          # The archive `fzv update` installs: fzv.exe at the root of the zip.
-          New-Item -ItemType Directory -Path "dist\$name" -Force | Out-Null
-          Copy-Item $bin "dist\$name\fzv.exe"
-          $archive = "$name.zip"
-          Compress-Archive -Path "dist\$name\fzv.exe" -DestinationPath $archive -Force
-          $assets.Add($archive)
+          # The packager names the assets, including the tagless
+          # `fzv-windows-<arch>.zip` that install.ps1 downloads from
+          # `releases/latest/download`.
+          $names = ./scripts/package-windows.ps1 `
+            -Tag $env:RELEASE_TAG `
+            -Arch '${{ matrix.arch }}' `
+            -Binary "target\${{ matrix.target }}\release\fzv.exe" `
+            -OutputDir .
 
           "ASSETS<<EOF" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          $assets | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          $names | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
           'EOF' | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Upload platform artifact
         uses: actions/upload-artifact@v7
         with:
-          name: fzv-${{ inputs.tag }}-${{ matrix.asset_suffix }}
+          name: fzv-${{ inputs.tag }}-${{ matrix.arch }}
           path: |
             ${{ env.ASSETS }}
+
+  installer:
+    name: publish the PowerShell installer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+
+      - name: Check that install.ps1 parses
+        shell: pwsh
+        run: |
+          [ScriptBlock]::Create((Get-Content install.ps1 -Raw)) | Out-Null
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: fzv-installer
+          path: install.ps1
 
   publish:
     name: publish GitHub release
     runs-on: ubuntu-latest
-    needs: [build]
+    needs: [build, installer]
     steps:
       - name: Check out release notes
         uses: actions/checkout@v7

@@ -21,16 +21,23 @@ fzv get dev -path D:/PL_Collections/zig
 
 ## 安装
 
-```bash
-# 用 cargo 进行安装
-cargo install --git https://github.com/ref42/fzv
+```powershell
+# PowerShell 一行装好（下载对应架构的 release，校验 SHA-256，解压并写进用户 PATH）
+irm https://github.com/ref42/fzv/releases/latest/download/install.ps1 | iex
+
+# 装完（新开终端也行），fzv 自己再把 zig 装到你指定的目录：
+fzv get dev, stable -path D:\zig
 ```
 
-```powershell
-# 用 PowerShell 脚本进行安装
+```bash
+# 或者用 cargo 从源码安装
 cargo install --git https://github.com/ref42/fzv
-# 或者：从 Release 下载 fzv-v*-windows-x86_64.zip，把里面的 fzv.exe 放进任意一个已在 PATH 里的目录
+
+# 或者从 Release 下载 fzv-v*-windows-x86_64.zip，把里面的 fzv.exe 放进任意一个已在 PATH 里的目录
 ```
+
+> `install.ps1` 默认装到 `%LOCALAPPDATA%\Programs\fzv`，不需要管理员权限；想换位置或从镜像装：
+> `.\install.ps1 -InstallDir D:\Tools\fzv -BaseUrl https://mirror.example/fzv`
 
 ## 命令
 
@@ -55,11 +62,5 @@ cargo install --git https://github.com/ref42/fzv
 | `-verbose` | 连镜像选择、校验值、解压路径这些细节一起打印 |
 | `-force` | `update`：不管本地是不是最新，都重装一遍最新 release |
 
-选项写成单横线（Windows 工具的习惯）；`--path` 这种双横线、以及 `-PATH` 这种大小写写法也都认。
 
-几点补充：
-
-- **镜像不用配**：内置 16 个社区镜像，按实测速度排序使用；某个镜像开始拒绝请求（公开服务上常见的 `429`）会自动换下一个，已经下到的部分保留接着下，最后兜底 ziglang.org。
-- **想强制刷新索引**：删掉 `<版本目录>\.fzv\download-index.json`。
-- **想看 fzv 到底在干什么**：加 `-verbose`。
 

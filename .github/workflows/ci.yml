@@ -67,3 +67,31 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --locked --target ${{ matrix.target }}
+
+  installer:
+    name: Test the PowerShell installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+
+      - name: Check that install.ps1 parses
+        shell: pwsh
+        run: |
+          [ScriptBlock]::Create((Get-Content install.ps1 -Raw)) | Out-Null
+
+      # Packages the binary the way the release workflow does and installs from
+      # the result: asset names, SHA256SUMS, the refusal of a tampered archive,
+      # and a user PATH that keeps its registry value type.
+      - name: Install from a packaged release
+        shell: pwsh
+        run: ./scripts/test-install.ps1 -Binary target/x86_64-pc-windows-msvc/release/fzv.exe
