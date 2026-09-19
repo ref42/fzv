@@ -298,8 +298,21 @@ mod tests {
     fn explicit_paths_win_over_path_lookup() {
         let root = std::env::temp_dir().join(format!("fzv-cli-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
-        assert_eq!(resolve_root(Some(&root)).unwrap(), root);
-        assert_eq!(resolve_root_opt(Some(&root)), Some(root.clone()));
+        // An explicit path is reported the way it will be used: canonical, so
+        // that one directory spelled two ways cannot look like two roots. The
+        // temp directory itself may be spelled with an 8.3 short name (`RUNNER~1`)
+        // on a machine where that name exists, so the raw value is not the
+        // expected one.
+        let expected = path_util::canonical_path(&root, platform::style()).unwrap();
+        assert_eq!(resolve_root(Some(&root)).unwrap(), expected);
+        assert_eq!(resolve_root_opt(Some(&root)), Some(expected.clone()));
+
+        // The spellings the canonicalization is there for.
+        let other_slashes = PathBuf::from(root.to_string_lossy().replace('\\', "/"));
+        assert_eq!(resolve_root(Some(&other_slashes)).unwrap(), expected);
+        let dot_dot = root.join(".").join("..").join(root.file_name().unwrap());
+        assert_eq!(resolve_root(Some(&dot_dot)).unwrap(), expected);
+
         std::fs::remove_dir_all(root).unwrap();
     }
 }

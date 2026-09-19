@@ -5,9 +5,9 @@
 
 .DESCRIPTION
     Packages a built fzv.exe with scripts/package-windows.ps1 - the packager the
-    release workflow uses - and runs install.ps1 against the result, so the asset
-    names, the checksum file and the PATH handling are exercised together, and a
-    tampered archive is shown to be refused.
+    release workflow uses - serves it over HTTP on localhost, and runs install.ps1
+    against it, so the asset names, the checksum file and the PATH handling are
+    exercised together, and a tampered archive is shown to be refused.
 
     fzv is installed into a scratch directory and the user PATH is put back
     afterwards, so the machine is left as it was.
@@ -54,6 +54,67 @@ if ($null -ne $savedPath) {
 }
 $savedSessionPath = $env:Path
 
+# A port the system is willing to hand out right now.
+function Get-FreePort {
+    $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $probe.Start()
+    $port = ([System.Net.IPEndPoint]$probe.LocalEndpoint).Port
+    $probe.Stop()
+    $port
+}
+
+# Serves `Directory` over http://localhost:`Port` in a background job, and waits
+# until it answers.
+#
+# Over HTTP rather than a `file://` URL, because that is what a user downloads
+# from - and because PowerShell 7, which CI uses, cannot open `file://` URLs at
+# all, so a test written that way only passes an older PowerShell.
+function Start-ReleaseServer {
+    param(
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][int]$Port
+    )
+
+    $job = Start-Job -ScriptBlock {
+        param($Directory, $Port)
+        $listener = [System.Net.HttpListener]::new()
+        $listener.Prefixes.Add("http://localhost:$Port/")
+        $listener.Start()
+        while ($listener.IsListening) {
+            $context = $listener.GetContext()
+            $file = Join-Path $Directory ([System.IO.Path]::GetFileName($context.Request.Url.LocalPath))
+            if (Test-Path -Path $file -PathType Leaf) {
+                $bytes = [System.IO.File]::ReadAllBytes($file)
+                $context.Response.ContentLength64 = $bytes.Length
+                $context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+            } else {
+                $context.Response.StatusCode = 404
+            }
+            $context.Response.Close()
+        }
+    } -ArgumentList $Directory, $Port
+
+    $url = "http://localhost:$Port"
+    $probe = Join-Path ([System.IO.Path]::GetTempPath()) ("fzv-probe-" + [System.IO.Path]::GetRandomFileName())
+    foreach ($attempt in 1..30) {
+        Start-Sleep -Milliseconds 500
+        try {
+            # `-OutFile`, not a parsed response: parsing is the one part of
+            # Invoke-WebRequest that differs between PowerShell versions.
+            Invoke-WebRequest -Uri "$url/SHA256SUMS" -OutFile $probe -TimeoutSec 5
+            Remove-Item -Path $probe -Force -ErrorAction SilentlyContinue
+            return $job
+        } catch {
+        }
+    }
+    Remove-Item -Path $probe -Force -ErrorAction SilentlyContinue
+    $output = Receive-Job -Job $job -Keep 2>&1 | Out-String
+    Stop-Job -Job $job -ErrorAction SilentlyContinue
+    Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    throw "the test server never answered on $url; it said: $output"
+}
+
+$server = $null
 try {
     if ($BaseUrl) {
         $url = $BaseUrl.TrimEnd('/')
@@ -66,7 +127,9 @@ try {
         # same `<hash>  <name>` format.
         $hash = (Get-FileHash -Algorithm SHA256 -Path $stable).Hash.ToLowerInvariant()
         "$hash  fzv-windows-x86_64.zip" | Out-File -FilePath (Join-Path $dist 'SHA256SUMS') -Encoding ascii
-        $url = 'file:///' + ($dist -replace '\\', '/')
+        $port = Get-FreePort
+        $server = Start-ReleaseServer -Directory $dist -Port $port
+        $url = "http://localhost:$port"
     }
     Write-Host "installing from $url"
 
@@ -139,6 +202,10 @@ try {
 
     Write-Host 'PASS'
 } finally {
+    if ($server) {
+        Stop-Job -Job $server -ErrorAction SilentlyContinue
+        Remove-Job -Job $server -Force -ErrorAction SilentlyContinue
+    }
     if ($null -eq $savedPath) {
         Remove-ItemProperty -Path $registryPath -Name Path -ErrorAction SilentlyContinue
     } else {

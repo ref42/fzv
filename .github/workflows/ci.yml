@@ -91,7 +91,11 @@ jobs:
 
       # Packages the binary the way the release workflow does and installs from
       # the result: asset names, SHA256SUMS, the refusal of a tampered archive,
-      # and a user PATH that keeps its registry value type.
+      # and a user PATH that keeps its registry value type. The shell version is
+      # printed because CI runs PowerShell 7 while a developer machine may only
+      # have Windows PowerShell 5.1, and the two do differ.
       - name: Install from a packaged release
         shell: pwsh
-        run: ./scripts/test-install.ps1 -Binary target/x86_64-pc-windows-msvc/release/fzv.exe
+        run: |
+          $PSVersionTable.PSVersion.ToString()
+          ./scripts/test-install.ps1 -Binary target/x86_64-pc-windows-msvc/release/fzv.exe
