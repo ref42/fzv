@@ -26,9 +26,29 @@ use std::{fs, process};
 
 /// Downloads `url` into `output` under the name `label`, keeping the partial
 /// file so that an interrupted transfer can be resumed by a later run.
-pub fn download(url: &str, output: &Path, label: &str, jobs: usize) -> Result<()> {
+///
+/// `expected` is the published size of the archive, when the caller has one. It
+/// is the only length available from a server that answers with
+/// `Transfer-Encoding: chunked` and so never names one, and without a length the
+/// transfer can neither draw a bar with a total nor be split into chunks.
+pub fn download(
+    url: &str,
+    output: &Path,
+    label: &str,
+    expected: Option<u64>,
+    jobs: usize,
+) -> Result<()> {
     let temporary = output.with_extension("downloading");
-    download_into(url, output, &temporary, true, label, false, jobs)
+    download_into(Transfer {
+        url,
+        output,
+        temporary: &temporary,
+        label,
+        expected,
+        resume: true,
+        quiet: false,
+        jobs,
+    })
 }
 
 /// A small text resource that was fetched, and the URL it finally came from.
@@ -89,44 +109,59 @@ pub fn download_once(url: &str, output: &Path) -> Result<()> {
     name.push(format!(".{}.downloading", process::id()));
     let temporary = PathBuf::from(name);
     // The index is a few kilobytes: a bar for it would only flicker past.
-    let result = download_into(url, output, &temporary, false, &label, true, 1);
+    let result = download_into(Transfer {
+        url,
+        output,
+        temporary: &temporary,
+        label: &label,
+        expected: None,
+        resume: false,
+        quiet: true,
+        jobs: 1,
+    });
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result
 }
 
-fn download_into(
-    url: &str,
-    output: &Path,
-    temporary: &Path,
+/// One transfer: what to fetch, where it goes, and the caller's policy for it.
+///
+/// A struct rather than eight positional arguments, four of which would be
+/// unlabelled flags at the call site.
+struct Transfer<'a> {
+    url: &'a str,
+    output: &'a Path,
+    temporary: &'a Path,
+    label: &'a str,
+    /// The published size, when the caller knows it.
+    expected: Option<u64>,
+    /// Keep the partial file, so a later run continues from what is on disk.
     resume: bool,
-    label: &str,
+    /// Draw nothing: the small internal fetches.
     quiet: bool,
     jobs: usize,
-) -> Result<()> {
-    let url = url.to_string();
-    let output = output.to_path_buf();
-    let temporary = temporary.to_path_buf();
-    let label = label.to_string();
-    tokio::runtime::Runtime::new()
-        .map_err(|e| err!("unable to start async runtime: {e}"))?
-        .block_on(async move {
-            download_async(&url, &output, &temporary, resume, &label, quiet, jobs).await
-        })
 }
 
-async fn download_async(
-    url: &str,
-    output: &Path,
-    temporary: &Path,
-    resume: bool,
-    label: &str,
-    quiet: bool,
-    jobs: usize,
-) -> Result<()> {
+fn download_into(transfer: Transfer<'_>) -> Result<()> {
+    tokio::runtime::Runtime::new()
+        .map_err(|e| err!("unable to start async runtime: {e}"))?
+        .block_on(download_async(transfer))
+}
+
+async fn download_async(transfer: Transfer<'_>) -> Result<()> {
     use std::time::Duration;
 
+    let Transfer {
+        url,
+        output,
+        temporary,
+        label,
+        expected,
+        resume,
+        quiet,
+        jobs,
+    } = transfer;
     let jobs = jobs.clamp(1, 32);
     let client = reqwest::Client::builder()
         .user_agent("fzv/0.1")
@@ -140,7 +175,19 @@ async fn download_async(
     // transfer continues from the next one. Nothing has been drawn yet, so a
     // switch here cannot disturb a progress line.
     let sources = Arc::new(select_download_sources(&client, url, output).await);
-    let (total, supports_ranges) = probe_length(&client, &sources).await;
+    // A published size answers the question the server is otherwise asked. A
+    // proxy or a mirror that re-encodes the body in chunks names no length at
+    // all - not on the response, and not on a HEAD - and a transfer without one
+    // loses both the total on its progress line and every connection but the
+    // first, because chunks are ranges and ranges need a length.
+    let (total, supports_ranges) = match expected.filter(|size| *size > 0) {
+        Some(total) => (Some(total), sources.can_serve_chunks(&client, 0).await),
+        None => probe_length(&client, &sources).await,
+    };
+    match total {
+        Some(total) => detail!("fzv: {:.1} MiB to fetch", total as f64 / 1_048_576.0),
+        None => detail!("fzv: the server did not say how large the archive is"),
+    }
     let progress = Arc::new(if quiet {
         Progress::silent()
     } else {
@@ -419,6 +466,7 @@ async fn fetch_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indicatif::{InMemoryTerm, ProgressDrawTarget};
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::sync::Mutex;
@@ -456,6 +504,24 @@ mod tests {
         /// sends only the first half of a body, the way a mirror that drops a
         /// transfer does.
         fn start(payload: Arc<Vec<u8>>, refuse_after: usize, truncate: bool) -> Server {
+            Server::spawn(payload, refuse_after, truncate, false)
+        }
+
+        /// A server that never names a length: no `Content-Length` on a
+        /// response and none on a HEAD, which is what a mirror, a CDN or a proxy
+        /// that re-encodes the body with `Transfer-Encoding: chunked` looks
+        /// like. It does answer byte ranges, so it is only the length that is
+        /// missing.
+        fn start_hiding_length(payload: Arc<Vec<u8>>) -> Server {
+            Server::spawn(payload, usize::MAX, false, true)
+        }
+
+        fn spawn(
+            payload: Arc<Vec<u8>>,
+            refuse_after: usize,
+            truncate: bool,
+            hide_length: bool,
+        ) -> Server {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
             let calls = Arc::new(AtomicUsize::new(0));
@@ -480,6 +546,7 @@ mod tests {
                                 &payload,
                                 refuse_after,
                                 truncate,
+                                hide_length,
                                 &calls,
                                 &first_range,
                             )
@@ -496,9 +563,13 @@ mod tests {
             }
         }
 
+        fn url(&self, name: &str) -> String {
+            format!("http://{}/{name}", self.address)
+        }
+
         fn source(&self, name: &str) -> mirrors::Source {
             mirrors::Source {
-                url: format!("http://{}/{name}", self.address),
+                url: self.url(name),
                 ranges: true,
                 total: Some(TOTAL as u64),
             }
@@ -531,6 +602,7 @@ mod tests {
         payload: &[u8],
         refuse_after: usize,
         truncate: bool,
+        hide_length: bool,
         calls: &AtomicUsize,
         first_range: &Mutex<Option<u64>>,
     ) {
@@ -571,9 +643,16 @@ mod tests {
             return;
         }
         if method == "HEAD" {
+            // A server that hides the length says nothing here either: it is not
+            // the HEAD that makes it unusable, only the missing size.
+            let length = if hide_length {
+                String::new()
+            } else {
+                format!("Content-Length: {total}\r\n")
+            };
             let _ = stream.write_all(
                 format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\n\
+                    "HTTP/1.1 200 OK\r\n{length}Accept-Ranges: bytes\r\n\
                      Connection: close\r\n\r\n"
                 )
                 .as_bytes(),
@@ -601,6 +680,28 @@ mod tests {
         } else {
             promised
         };
+        if hide_length {
+            // Chunked encoding: a full body, and still no length to read.
+            let status = if range.is_some() {
+                format!("206 Partial Content\r\nContent-Range: bytes {start}-{end}/{total}\r\n")
+            } else {
+                "200 OK\r\n".to_string()
+            };
+            let header = format!(
+                "HTTP/1.1 {status}Accept-Ranges: bytes\r\n\
+                 Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+            );
+            if stream.write_all(header.as_bytes()).is_err() {
+                return;
+            }
+            for piece in body.chunks(8 * 1024) {
+                let _ = write!(stream, "{:x}\r\n", piece.len());
+                let _ = stream.write_all(piece);
+                let _ = stream.write_all(b"\r\n");
+            }
+            let _ = stream.write_all(b"0\r\n\r\n");
+            return;
+        }
         let header = if range.is_some() {
             format!(
                 "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{total}\r\n\
@@ -854,7 +955,156 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// A mirror that cannot serve chunks is passed over for the chunked pass    /// (the streaming pass can still use it), and it is not marked failed.
+    /// Draws a line the way a download does, into a terminal that keeps it, so
+    /// the shape of the line can be asserted instead of described.
+    fn term_sink(term: &InMemoryTerm) -> Box<dyn Fn() -> ProgressDrawTarget + Send + Sync> {
+        let term = term.clone();
+        Box::new(move || ProgressDrawTarget::term_like(Box::new(term.clone())))
+    }
+
+    /// A source the way the mirror probe records one that names no length: no
+    /// total, and no promise of byte ranges.
+    fn hiding_source(server: &Server, name: &str) -> mirrors::Source {
+        mirrors::Source {
+            url: server.url(name),
+            ranges: false,
+            total: None,
+        }
+    }
+
+    /// The reported line reproduced: `Zig 0.16.0 51.81 MiB 1.28 MiB/s`, with no
+    /// bar and no `x/y`. It is what a source that never names a length leaves on
+    /// the screen - and being barless, it also cannot be split into ranges.
+    #[test]
+    fn a_source_that_hides_its_length_draws_a_line_without_a_total() {
+        let root = temp_dir("hidden-length");
+        let payload = payload();
+        let server = Server::start_hiding_length(Arc::clone(&payload));
+        let path = root.join("archive.downloading");
+        let term = InMemoryTerm::new(12, 120);
+        let progress = Arc::new(Progress::build(None, "Zig 0.16.0", term_sink(&term)));
+
+        run(download_single(
+            &reqwest::Client::new(),
+            &Sources::new(vec![hiding_source(&server, "archive.zip")]),
+            &path,
+            &progress,
+        ))
+        .unwrap();
+        progress.redraw();
+
+        assert_written(&path, &payload, "a source that hides its length");
+        let drawn = term.contents();
+        assert!(drawn.starts_with("Zig 0.16.0 "), "{drawn:?}");
+        assert!(
+            !drawn.contains('['),
+            "a bar was drawn for a length the server never sent: {drawn:?}"
+        );
+        assert!(
+            !drawn.contains("/6.00 MiB"),
+            "a total was invented: {drawn:?}"
+        );
+        assert!(
+            server.first_range().is_none(),
+            "a length-less transfer cannot be cut into ranges"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The fix for that line: the size the index publishes is what the bar's
+    /// total comes from, so the same source draws a bar - and the length is
+    /// known before the first byte, not guessed from a response.
+    #[test]
+    fn a_published_size_puts_the_total_back_on_the_line() {
+        let root = temp_dir("known-length");
+        let payload = payload();
+        let server = Server::start_hiding_length(Arc::clone(&payload));
+        let path = root.join("archive.downloading");
+        let term = InMemoryTerm::new(12, 120);
+        let progress = Arc::new(Progress::build(
+            Some(TOTAL as u64),
+            "Zig 0.16.0",
+            term_sink(&term),
+        ));
+
+        run(download_single(
+            &reqwest::Client::new(),
+            &Sources::new(vec![hiding_source(&server, "archive.zip")]),
+            &path,
+            &progress,
+        ))
+        .unwrap();
+        progress.redraw();
+
+        assert_written(&path, &payload, "a published size");
+        let drawn = term.contents();
+        assert!(drawn.contains('['), "no bar was drawn: {drawn:?}");
+        assert!(
+            drawn.contains("/6.00 MiB"),
+            "the published total is missing: {drawn:?}"
+        );
+        assert_eq!(progress.total(), TOTAL as u64);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The length is also what the chunked pass needs, so a published size brings
+    /// the connections back: the same length-hiding source is fetched over
+    /// several ranges once the size is known, and in a single stream before.
+    #[test]
+    fn a_published_size_brings_the_connections_back() {
+        let payload = payload();
+
+        // A name that is not `zig-*.zip` keeps the mirror probing out of a test
+        // that only talks to 127.0.0.1.
+        let unknown = Server::start_hiding_length(Arc::clone(&payload));
+        let root = temp_dir("size-unknown");
+        let output = root.join("archive.zip");
+        let temporary = root.join("archive.downloading");
+        run(download_async(Transfer {
+            url: &unknown.url("archive.zip"),
+            output: &output,
+            temporary: &temporary,
+            label: "test",
+            expected: None,
+            resume: false,
+            quiet: true,
+            jobs: 4,
+        }))
+        .unwrap();
+        assert_written(&output, &payload, "without a published size");
+        assert!(
+            unknown.first_range().is_none(),
+            "a length-less transfer was chunked"
+        );
+        assert_eq!(unknown.calls(), 2, "a HEAD and one stream");
+        std::fs::remove_dir_all(root).unwrap();
+
+        let known = Server::start_hiding_length(Arc::clone(&payload));
+        let root = temp_dir("size-known");
+        let output = root.join("archive.zip");
+        let temporary = root.join("archive.downloading");
+        run(download_async(Transfer {
+            url: &known.url("archive.zip"),
+            output: &output,
+            temporary: &temporary,
+            label: "test",
+            expected: Some(TOTAL as u64),
+            resume: true,
+            quiet: true,
+            jobs: 4,
+        }))
+        .unwrap();
+        assert_written(&output, &payload, "with a published size");
+        assert!(
+            known.first_range().is_some(),
+            "the published size was not used to split the transfer"
+        );
+        assert!(known.calls() > 3, "{} requests", known.calls());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A mirror that cannot serve chunks is passed over for the chunked pass
+    /// (the streaming pass can still use it), and it is not marked failed.
     #[test]
     fn a_source_without_ranges_is_passed_over_for_chunks() {
         let payload = payload();

@@ -49,7 +49,13 @@ pub fn ensure_zig(root: &Path, version: &Version, jobs: usize) -> Result<PathBuf
         }
     }
     if !archive_path.is_file() {
-        crate::download::download(&archive.url, &archive_path, &format!("Zig {version}"), jobs)?;
+        crate::download::download(
+            &archive.url,
+            &archive_path,
+            &format!("Zig {version}"),
+            archive.size,
+            jobs,
+        )?;
         if let Err(error) = verify_sha256(&archive_path, archive.sha256.as_deref()) {
             // Never leave bytes that failed verification behind.
             let _ = std::fs::remove_file(&archive_path);
@@ -93,8 +99,9 @@ pub fn ensure_zls(root: &Path, jobs: usize) -> Result<PathBuf> {
         // verified the way Zig archives are.
         detail!("fzv: downloading ZLS (no published checksum; not verifying)");
         let mut last_error = None;
+        // ZLS publishes no size either, so the length comes from the response.
         for attempt in 1..=3 {
-            match crate::download::download(&url, &archive_path, "ZLS", jobs) {
+            match crate::download::download(&url, &archive_path, "ZLS", None, jobs) {
                 Ok(()) => break,
                 Err(error) => {
                     if attempt < 3 {

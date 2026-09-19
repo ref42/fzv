@@ -31,6 +31,10 @@ pub struct Archive {
     pub file_name: String,
     /// Published SHA-256, when the index describes this build.
     pub sha256: Option<String>,
+    /// Published size in bytes, when the index states one. Every entry does,
+    /// which is what keeps the progress bar honest behind a server that answers
+    /// with `Transfer-Encoding: chunked` and so never names a length.
+    pub size: Option<u64>,
 }
 
 /// The parsed download index.
@@ -124,21 +128,11 @@ impl Index {
 
     /// The archive the index publishes for `version` on this platform.
     pub fn archive(&self, version: &Version) -> Result<Option<Archive>> {
-        Ok(self
-            .find_archive(version.as_str(), platform_key()?)
-            .map(|(url, file_name, sha256)| Archive {
-                url,
-                file_name,
-                sha256,
-            }))
+        Ok(self.find_archive(version.as_str(), platform_key()?))
     }
 
     /// Reads `version`/`platform` out of the document.
-    fn find_archive(
-        &self,
-        version: &str,
-        platform: &str,
-    ) -> Option<(String, String, Option<String>)> {
+    fn find_archive(&self, version: &str, platform: &str) -> Option<Archive> {
         let entry = self.document.get(version)?.get(platform)?;
         let url = entry.string_at("tarball")?;
         let file_name = url
@@ -146,11 +140,12 @@ impl Index {
             .next()
             .filter(|name| !name.is_empty())?
             .to_string();
-        Some((
-            url.to_string(),
+        Some(Archive {
+            url: url.to_string(),
             file_name,
-            entry.string_at("shasum").map(str::to_ascii_lowercase),
-        ))
+            sha256: entry.string_at("shasum").map(str::to_ascii_lowercase),
+            size: entry.u64_at("size").filter(|size| *size > 0),
+        })
     }
 }
 
@@ -195,6 +190,7 @@ pub fn download_info(version: &Version, root: &Path) -> Result<Archive> {
         url,
         file_name,
         sha256: None,
+        size: None,
     })
 }
 
@@ -250,10 +246,12 @@ mod tests {
         "master": {"version": "0.17.0-dev.2228+955228b68"},
         "0.13.0": {"x86_64-windows": {
             "tarball": "https://ziglang.org/download/0.13.0/zig-windows-x86_64-0.13.0.zip",
-            "shasum": "D859994725EF9402381E557C60BB57497215682E355204D754EE3DF75EE3C158"}},
+            "shasum": "D859994725EF9402381E557C60BB57497215682E355204D754EE3DF75EE3C158",
+            "size": "82229343"}},
         "0.14.1": {"x86_64-windows": {
             "tarball": "https://ziglang.org/download/0.14.1/zig-x86_64-windows-0.14.1.zip",
-            "shasum": "554f5378228923ffd558eac35e21af020c73789d87afeabf4bfd16f2e6feed2c"}},
+            "shasum": "554f5378228923ffd558eac35e21af020c73789d87afeabf4bfd16f2e6feed2c",
+            "size": 50123456}},
         "0.15.0-rc.1": {"x86_64-windows": {
             "tarball": "https://ziglang.org/download/0.15.0-rc.1/zig-x86_64-windows-0.15.0-rc.1.zip"}}
     }"#;
@@ -299,16 +297,27 @@ mod tests {
         let archive = index
             .find_archive("0.13.0", "x86_64-windows")
             .expect("entry");
-        assert_eq!(archive.1, "zig-windows-x86_64-0.13.0.zip");
+        assert_eq!(archive.file_name, "zig-windows-x86_64-0.13.0.zip");
         assert_eq!(
-            archive.2.as_deref(),
+            archive.sha256.as_deref(),
             Some("d859994725ef9402381e557c60bb57497215682e355204d754ee3df75ee3c158")
         );
-        // A build without a published checksum is still usable.
+        // The size is published as a string, which is what the progress bar and
+        // the chunked pass need; a bare number is read the same way.
+        assert_eq!(archive.size, Some(82229343));
+        assert_eq!(
+            index
+                .find_archive("0.14.1", "x86_64-windows")
+                .expect("entry")
+                .size,
+            Some(50123456)
+        );
+        // A build without a published checksum or size is still usable.
         let archive = index
             .find_archive("0.15.0-rc.1", "x86_64-windows")
             .expect("entry");
-        assert_eq!(archive.2, None);
+        assert_eq!(archive.sha256, None);
+        assert_eq!(archive.size, None);
         // Unknown version or platform.
         assert!(index.find_archive("0.14.1", "aarch64-windows").is_none());
         assert!(index.find_archive("0.99.0", "x86_64-windows").is_none());

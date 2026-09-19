@@ -58,6 +58,17 @@ impl Value {
     pub fn string_at(&self, key: &str) -> Option<&str> {
         self.get(key).and_then(Value::as_str)
     }
+
+    /// The number stored at `key`, written either way.
+    ///
+    /// The Zig index quotes its sizes (`"size": "97217739"`) while GitHub
+    /// writes them bare, so both forms are read.
+    pub fn u64_at(&self, key: &str) -> Option<u64> {
+        match self.get(key)? {
+            Value::Number(text) | Value::String(text) => text.parse().ok(),
+            _ => None,
+        }
+    }
 }
 
 pub fn parse(text: &str) -> Result<Value, String> {
@@ -317,6 +328,10 @@ mod tests {
         assert_eq!(entry.string_at("shasum"), Some("d85999"));
         assert_eq!(entry.string_at("size"), None);
         assert_eq!(entry.get("size"), Some(&Value::Number("79163968".into())));
+        // Both spellings of a number are read the same way.
+        assert_eq!(entry.u64_at("size"), Some(79163968));
+        assert_eq!(entry.u64_at("shasum"), None);
+        assert_eq!(index.u64_at("master"), None);
         let mut keys: Vec<_> = index.keys().collect();
         keys.sort_unstable();
         assert_eq!(keys, ["0.13.0", "master"]);
@@ -349,5 +364,15 @@ mod tests {
             value.get("size").unwrap(),
             &Value::Number("82229343".into())
         );
+    }
+
+    #[test]
+    fn reads_sizes_in_both_spellings() {
+        let value =
+            parse(r#"{"quoted": "97217739", "bare": 97217739, "text": "unknown"}"#).unwrap();
+        assert_eq!(value.u64_at("quoted"), Some(97217739));
+        assert_eq!(value.u64_at("bare"), Some(97217739));
+        assert_eq!(value.u64_at("text"), None);
+        assert_eq!(value.u64_at("missing"), None);
     }
 }

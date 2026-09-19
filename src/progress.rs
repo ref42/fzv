@@ -90,7 +90,11 @@ impl Progress {
         Progress::build(None, "", hidden_sink())
     }
 
-    fn build(
+    /// The same, with somewhere other than stderr to draw.
+    ///
+    /// A download cannot be pointed at a buffer, so the tests that watch a line
+    /// being drawn for a real transfer build their progress here.
+    pub(crate) fn build(
         total: Option<u64>,
         label: &str,
         sink: Box<dyn Fn() -> ProgressDrawTarget + Send + Sync>,
@@ -184,6 +188,12 @@ impl Progress {
     /// Takes the line off the screen: what happens next is what matters.
     pub(crate) fn finish(&self) {
         self.bar.finish_and_clear();
+    }
+
+    /// Draws the current state instead of waiting for the refresh interval.
+    #[cfg(test)]
+    pub(crate) fn redraw(&self) {
+        self.bar.force_draw();
     }
 
     /// Runs `print` without the progress line in the way, redrawing it after.

@@ -147,6 +147,9 @@ fn install(
         &asset_url(releases, release, name),
         &archive_path,
         &format!("fzv {version}"),
+        // The release API does state an asset size, but this download is a few
+        // megabytes from GitHub, which always sends a `Content-Length`.
+        None,
         crate::cli::args::DEFAULT_JOBS,
     )?;
     match published_checksum(releases, release, name) {
