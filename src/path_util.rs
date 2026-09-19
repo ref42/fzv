@@ -2,9 +2,12 @@
 //!
 //! fzv runs on Windows, so the rules here are the Windows ones: `;`-separated
 //! `PATH` values, either separator inside a path, case-insensitive comparison,
-//! and protection against touching unrelated entries. They are kept free of any
-//! registry or environment access — the platform layer passes the raw value in —
-//! which also makes them directly testable.
+//! and protection against touching unrelated entries.
+//!
+//! Deciding whether an entry is *one of fzv's* directories needs the filesystem
+//! (does it hold the executable?) so that check is passed in as a predicate; the
+//! rules themselves stay free of registry, environment and filesystem access,
+//! which is what makes them directly testable.
 
 use std::path::{Path, PathBuf};
 
@@ -112,40 +115,46 @@ pub fn path_scope(key: &str, style: PathStyle) -> Option<String> {
     Some(format!("{trimmed}{}", style.native_separator))
 }
 
+/// The last component of a path, normalized for comparison.
+pub fn file_name_key(key: &str) -> &str {
+    key.rsplit(['\\', '/']).next().unwrap_or_default()
+}
+
 /// True for the directory names fzv uses inside a versions directory.
 pub fn is_version_dir_name(key: &str) -> bool {
-    let name = key.rsplit(['\\', '/']).next().unwrap_or_default();
+    let name = file_name_key(key);
     name == "dev" || crate::version::Version::parse(name).is_some()
 }
 
-/// Whether `entry` has the shape of one of fzv's Zig directories, without
+/// True for the directory name of the shared ZLS installation.
+pub fn is_zls_dir_name(key: &str) -> bool {
+    file_name_key(key) == "zls"
+}
+
+/// Whether `entry` has the shape of one of fzv's version directories, without
 /// touching the filesystem.
 pub fn looks_like_fzv_zig_dir(entry: &str, style: PathStyle) -> bool {
     let text = strip_verbatim(entry.trim(), style);
     is_absolute(&text, style) && is_version_dir_name(&path_key(&text, style))
 }
 
-/// True when a `PATH` entry is one of fzv's Zig directories: an absolute
-/// directory named after a version that actually holds a Zig executable.
-///
-/// The executable check is what makes this safe. Unrelated tools also live in
-/// version-named directories (`...\ninja\1.13.2`, `...\probe-rs\0.32.0`), and
-/// those must never be mistaken for a Zig version or removed from `PATH`.
-pub fn is_fzv_zig_dir(entry: &str, style: PathStyle, zig_executable: &str) -> bool {
-    if !looks_like_fzv_zig_dir(entry, style) {
-        return false;
-    }
-    let text = strip_verbatim(entry.trim(), style);
-    Path::new(&text).join(zig_executable).is_file()
-}
-
 /// The first entry of a `PATH` value that is one of fzv's Zig directories.
-pub fn zig_dir_in_path(value: &str, style: PathStyle, zig_executable: &str) -> Option<PathBuf> {
+///
+/// `is_fzv_dir` decides whether a candidate directory really is one of fzv's
+/// (it holds the Zig executable, or sits next to fzv's state directory); only
+/// version directories are considered, so the shared ZLS directory is never
+/// mistaken for the active Zig version.
+pub fn zig_dir_in_path(
+    value: &str,
+    style: PathStyle,
+    is_fzv_dir: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
     value
         .split(style.separator)
         .map(str::trim)
-        .find(|entry| is_fzv_zig_dir(entry, style, zig_executable))
+        .filter(|entry| !entry.is_empty() && looks_like_fzv_zig_dir(entry, style))
         .map(|entry| PathBuf::from(strip_verbatim(entry, style)))
+        .find(|path| is_fzv_dir(path))
 }
 
 /// The form a path takes inside a `PATH` value: native separators and no
@@ -186,23 +195,26 @@ pub fn is_drive_relative(text: &str, style: PathStyle) -> bool {
         && !text[2..].contains(['\\', '/'])
 }
 
-/// Rewrites a `PATH` value for `root`, inserting `wanted` first when given.
+/// Rewrites a `PATH` value for `root`, inserting `wanted` first (in order).
 ///
 /// Two kinds of entries belong to fzv and are dropped:
 /// * anything below `root` (when `root` is deep enough for a safe prefix match),
-/// * entries recognised as one of fzv's Zig directories, which is how a previous
+/// * entries recognised as one of fzv's directories, which is how a previous
 ///   versions directory is found again after switching to a new one.
 ///
 /// Every other entry is preserved verbatim.
 pub fn rewrite_path(
     old: &str,
     root: &Path,
-    wanted: Option<&Path>,
+    wanted: &[&Path],
     style: PathStyle,
-    zig_executable: &str,
+    is_fzv_dir: impl Fn(&Path) -> bool,
 ) -> String {
     let scope = path_scope(&path_key(&root.to_string_lossy(), style), style);
-    let wanted_key = wanted.map(|path| path_key(&path.to_string_lossy(), style));
+    let wanted_keys: Vec<String> = wanted
+        .iter()
+        .map(|path| path_key(&path.to_string_lossy(), style))
+        .collect();
     let mut entries = Vec::new();
     for entry in old.split(style.separator).map(str::trim) {
         if entry.is_empty() {
@@ -212,16 +224,14 @@ pub fn rewrite_path(
         let under_root = scope
             .as_ref()
             .is_some_and(|scope| key.starts_with(scope.as_str()));
-        if Some(&key) == wanted_key.as_ref()
-            || under_root
-            || is_fzv_zig_dir(entry, style, zig_executable)
-        {
+        let text = strip_verbatim(entry, style);
+        if wanted_keys.contains(&key) || under_root || is_fzv_dir(Path::new(&text)) {
             continue;
         }
         entries.push(entry.to_string());
     }
-    if let Some(wanted) = wanted {
-        entries.insert(0, display_path(wanted, style));
+    for entry in wanted.iter().rev() {
+        entries.insert(0, display_path(entry, style));
     }
     entries.join(&style.separator.to_string())
 }
@@ -231,17 +241,23 @@ pub fn rewrite_path(
 pub fn dropped_entries(
     old: &str,
     new: &str,
-    wanted: Option<&Path>,
+    wanted: &[&Path],
     style: PathStyle,
 ) -> Vec<String> {
-    let new_keys: Vec<String> = new.split(style.separator).map(|entry| path_key(entry, style)).collect();
-    let wanted_key = wanted.map(|path| path_key(&path.to_string_lossy(), style));
+    let new_keys: Vec<String> = new
+        .split(style.separator)
+        .map(|entry| path_key(entry, style))
+        .collect();
+    let wanted_keys: Vec<String> = wanted
+        .iter()
+        .map(|path| path_key(&path.to_string_lossy(), style))
+        .collect();
     old.split(style.separator)
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
         .filter(|entry| {
             let key = path_key(entry, style);
-            Some(&key) != wanted_key.as_ref() && !new_keys.contains(&key)
+            !wanted_keys.contains(&key) && !new_keys.contains(&key)
         })
         .map(str::to_string)
         .collect()
@@ -250,6 +266,7 @@ pub fn dropped_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn windows() -> PathStyle {
         PathStyle::windows()
@@ -257,6 +274,23 @@ mod tests {
 
     fn unix() -> PathStyle {
         PathStyle::unix()
+    }
+
+    /// Stands in for the platform's filesystem check: a directory is fzv's when
+    /// it holds one of the executables fzv installs.
+    fn holds_executable(root: &Path) -> bool {
+        root.join("zig.exe").is_file() || root.join("zls.exe").is_file()
+    }
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "fzv-path-{label}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
     }
 
     #[test]
@@ -314,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn recognises_version_directory_names() {
+    fn recognises_version_and_zls_directory_names() {
         assert!(is_version_dir_name(&path_key(r"D:\zig\0.14.1", windows())));
         assert!(is_version_dir_name(&path_key(
             r"D:\zig\0.17.0-dev.2228+955228b68",
@@ -326,6 +360,9 @@ mod tests {
         assert!(!is_version_dir_name(&path_key(r"D:\zig\0.14", windows())));
         assert!(!is_version_dir_name(&path_key(r"D:\zig\0.14.1\bin", windows())));
         assert!(is_version_dir_name(&path_key("/home/u/zig/0.14.1", unix())));
+
+        assert!(is_zls_dir_name(&path_key(r"D:\zig\zls", windows())));
+        assert!(!is_zls_dir_name(&path_key(r"D:\zig\0.14.1", windows())));
     }
 
     #[test]
@@ -340,9 +377,49 @@ mod tests {
     }
 
     #[test]
-    fn drops_only_managed_entries_windows() {
+    fn finds_the_active_version_and_ignores_the_zls_directory() {
         let style = windows();
-        let base = temp_dir("rewrite-windows");
+        let base = temp_dir("detect");
+        let zig_dir = base.join("zig").join("0.14.1");
+        std::fs::create_dir_all(&zig_dir).unwrap();
+        std::fs::write(zig_dir.join("zig.exe"), b"exe").unwrap();
+        let zls_dir = base.join("zig").join("zls");
+        std::fs::create_dir_all(&zls_dir).unwrap();
+        std::fs::write(zls_dir.join("zls.exe"), b"exe").unwrap();
+        // An unrelated tool in a version-named directory.
+        let ninja = base.join("ninja").join("1.13.2");
+        std::fs::create_dir_all(&ninja).unwrap();
+        std::fs::write(ninja.join("ninja.exe"), b"exe").unwrap();
+
+        let value = format!(
+            "{}{}{}{}{}",
+            zls_dir.display(),
+            style.separator,
+            ninja.display(),
+            style.separator,
+            zig_dir.display()
+        );
+        assert_eq!(
+            zig_dir_in_path(&value, style, holds_executable),
+            Some(zig_dir.clone())
+        );
+        // A verbatim entry (written by an older fzv build) still resolves.
+        assert_eq!(
+            zig_dir_in_path(&format!(r"\\?\{}", zig_dir.display()), style, holds_executable),
+            Some(zig_dir)
+        );
+        // Only the ZLS directory: no active Zig version.
+        assert_eq!(
+            zig_dir_in_path(&zls_dir.display().to_string(), style, holds_executable),
+            None
+        );
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn rewrites_both_fzv_entries_and_keeps_everything_else() {
+        let style = windows();
+        let base = temp_dir("rewrite");
         let old_root = base.join("zig");
         let new_root = base.join("zig2");
         for (root, version) in [
@@ -354,6 +431,11 @@ mod tests {
             std::fs::create_dir_all(&directory).unwrap();
             std::fs::write(directory.join("zig.exe"), b"exe").unwrap();
         }
+        for root in [&old_root, &new_root] {
+            let directory = root.join("zls");
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join("zls.exe"), b"exe").unwrap();
+        }
         // An unrelated tool that also lives in a version-named directory.
         let ninja = base.join("ninja").join("1.13.2");
         std::fs::create_dir_all(&ninja).unwrap();
@@ -361,15 +443,22 @@ mod tests {
 
         let verbatim = format!(r"\\?\{}", old_root.join("0.14.0").display());
         let old = format!(
-            r"C:\Windows;{};{};{};{}",
+            r"C:\Windows;{};{};{};{};{}",
             old_root.join("0.13.0").display(),
             verbatim,
+            old_root.join("zls").display(),
             ninja.display(),
             base.join("other").display()
         );
-        let wanted = new_root.join("0.15.0");
-        let new = rewrite_path(&old, &new_root, Some(&wanted), style, "zig.exe");
-        assert!(new.starts_with(&format!("{}{}", wanted.display(), style.separator)));
+        let wanted_zig = new_root.join("0.15.0");
+        let wanted_zls = new_root.join("zls");
+        let wanted: Vec<&Path> = vec![&wanted_zig, &wanted_zls];
+        let new = rewrite_path(&old, &new_root, &wanted, style, holds_executable);
+
+        // Both new entries come first, in the order given.
+        let entries: Vec<&str> = new.split(style.separator).collect();
+        assert_eq!(entries[0], wanted_zig.display().to_string());
+        assert_eq!(entries[1], wanted_zls.display().to_string());
         for kept in [
             r"C:\Windows".to_string(),
             ninja.display().to_string(),
@@ -377,27 +466,31 @@ mod tests {
         ] {
             assert!(new.contains(&kept), "{kept} was dropped from {new}");
         }
-        assert!(!new.contains("0.13.0"), "{new} kept a managed entry");
-        assert!(!new.contains("0.14.0"), "{new} kept a managed entry");
+        // Both entries of the previous root (a version and its ZLS) are gone.
+        assert!(!new.contains("0.13.0"), "{new}");
+        assert!(!new.contains("0.14.0"), "{new}");
+        assert_eq!(new.matches(&old_root.join("zls").display().to_string()).count(), 0);
 
-        // Removing the active version clears only the managed entry.
-        let cleared = rewrite_path(&new, &new_root, None, style, "zig.exe");
+        // Removing the active selection clears both entries.
+        let cleared = rewrite_path(&new, &new_root, &[], style, holds_executable);
         assert!(!cleared.contains("0.15.0"), "{cleared}");
         assert!(cleared.contains("ninja"), "{cleared}");
 
         // The dropped entries can be reported.
-        let dropped = dropped_entries(&old, &new, Some(&wanted), style);
-        assert_eq!(dropped.len(), 2, "{dropped:?}");
-        assert!(dropped.iter().all(|entry| entry.contains("0.1")));
-
-        // A whole volume cannot be prefix-matched, so only recognised entries go.
-        let volume = rewrite_path(&old, Path::new(r"D:\"), Some(&wanted), style, "zig.exe");
-        assert!(volume.contains("ninja"), "{volume} dropped an unrelated entry");
-        assert!(volume.contains(&base.join("other").display().to_string()), "{volume}");
+        let dropped = dropped_entries(&old, &new, &wanted, style);
+        assert_eq!(dropped.len(), 3, "{dropped:?}");
 
         // Selecting the same version twice does not duplicate the entry.
-        let twice = rewrite_path(&new, &new_root, Some(&wanted), style, "zig.exe");
+        let twice = rewrite_path(&new, &new_root, &wanted, style, holds_executable);
         assert_eq!(twice.matches("0.15.0").count(), 1);
+
+        // A whole volume cannot be prefix-matched, so only recognised entries go.
+        let volume = rewrite_path(&old, Path::new(r"D:\"), &wanted, style, holds_executable);
+        assert!(volume.contains("ninja"), "{volume} dropped an unrelated entry");
+        assert!(
+            volume.contains(&base.join("other").display().to_string()),
+            "{volume}"
+        );
         std::fs::remove_dir_all(base).unwrap();
     }
 
@@ -407,25 +500,17 @@ mod tests {
         // host, so nothing is recognised as fzv's: the safe outcome.
         let style = unix();
         let old = "/usr/bin:/home/u/zig/0.14.1:/opt/ninja/1.13.2";
-        let new = rewrite_path(old, Path::new("/home/u/zig"), Some(Path::new("/home/u/zig/0.15.0")), style, "zig");
-        assert_eq!(
-            new,
-            "/home/u/zig/0.15.0:/usr/bin:/opt/ninja/1.13.2"
+        let new = rewrite_path(
+            old,
+            Path::new("/home/u/zig"),
+            &[Path::new("/home/u/zig/0.15.0")],
+            style,
+            |_| false,
         );
+        assert_eq!(new, "/home/u/zig/0.15.0:/usr/bin:/opt/ninja/1.13.2");
         // Entries under the root are dropped by the scope rule.
         let old = "/usr/bin:/home/u/zig/0.14.1:/opt/tools";
-        let new = rewrite_path(old, Path::new("/home/u/zig"), None, style, "zig");
+        let new = rewrite_path(old, Path::new("/home/u/zig"), &[], style, |_| false);
         assert_eq!(new, "/usr/bin:/opt/tools");
-    }
-
-    fn temp_dir(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "fzv-path-{label}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        root
     }
 }

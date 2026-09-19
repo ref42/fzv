@@ -99,12 +99,16 @@ Manage Zig versions that are switched by a single entry in your PATH.
   v                            print fzv version
   h                            show this help
 
-Selectors: latest, stable, master, or an exact version.
+Selectors:
+  dev, master, latest   the newest development snapshot (published under /builds)
+  stable                the newest stable release
+  0.16.0                an exact version
 
 How it works:
-  * 'fzv use <version>' replaces the fzv Zig directory in your user PATH with
-    '<versions>\\<version>'; that PATH entry is the active version, so fzv keeps
-    no other record of it.
+  * 'fzv use <version>' puts '<versions>\\<version>' in your user PATH, and
+    '<versions>\\zls' as well when ZLS is installed; the previous fzv entries are
+    removed. Those PATH entries are the active selection, so fzv keeps no other
+    record of it.
   * The versions directory is taken from '--path DIR' when given, otherwise
     from the Zig directory already in PATH.
   * With '--path DIR', 'get' installs there and then activates the newest of
@@ -154,9 +158,16 @@ pub fn active_version_dir() -> Option<PathBuf> {
 pub fn report_activation(version: &Version, activation: &platform::Activation) {
     println!("active Zig version: {version}");
     println!(
-        "PATH directory: {}",
-        path_util::display_path(&activation.directory, platform::style())
+        "zig PATH directory: {}",
+        path_util::display_path(&activation.zig_directory, platform::style())
     );
+    match &activation.zls_directory {
+        Some(directory) => println!(
+            "zls PATH directory: {}",
+            path_util::display_path(directory, platform::style())
+        ),
+        None => println!("zls PATH directory: none (ZLS is not installed)"),
+    }
     for note in &activation.notes {
         println!("{note}");
     }

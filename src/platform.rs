@@ -25,8 +25,10 @@ const PATH_VALUE: &str = "Path";
 /// What making a version active changed.
 #[derive(Debug)]
 pub struct Activation {
-    /// The directory that now holds the active Zig executable.
-    pub directory: PathBuf,
+    /// The version directory that now holds the active Zig executable.
+    pub zig_directory: PathBuf,
+    /// The shared ZLS directory, when ZLS is installed.
+    pub zls_directory: Option<PathBuf>,
     /// Lines the CLI should show, already phrased for the user.
     pub notes: Vec<String>,
 }
@@ -58,7 +60,46 @@ pub fn exit_code(status: &std::process::ExitStatus) -> i32 {
 
 /// The first `PATH` entry that is one of fzv's Zig directories.
 pub fn zig_dir_in_path(value: &str) -> Option<PathBuf> {
-    path_util::zig_dir_in_path(value, style(), zig_executable())
+    path_util::zig_dir_in_path(value, style(), is_fzv_version_dir)
+}
+
+/// Whether `directory` is one of the version directories fzv creates.
+///
+/// An install that was interrupted can leave the directory empty, or with the
+/// archive still nested inside it, so the executable alone is not enough: a
+/// directory named after a version whose parent is one of fzv's versions
+/// directories (it holds fzv's `.fzv` state) is recognised as well. That is what
+/// keeps the versions directory derivable when an install needs repairing.
+fn is_fzv_version_dir(directory: &Path) -> bool {
+    if !path_util::is_version_dir_name(&path_util::path_key(
+        &directory.to_string_lossy(),
+        style(),
+    )) {
+        return false;
+    }
+    crate::layout::find_zig_executable(directory).is_ok()
+        || directory
+            .parent()
+            .is_some_and(crate::store::is_versions_root)
+}
+
+/// Whether `directory` is the shared ZLS directory fzv creates.
+fn is_fzv_zls_dir(directory: &Path) -> bool {
+    if !path_util::is_zls_dir_name(&path_util::path_key(
+        &directory.to_string_lossy(),
+        style(),
+    )) {
+        return false;
+    }
+    directory.join(zls_executable()).is_file()
+        || directory
+            .parent()
+            .is_some_and(crate::store::is_versions_root)
+}
+
+/// Any `PATH` entry fzv owns: one of its version directories or its ZLS one.
+fn is_fzv_directory(directory: &Path) -> bool {
+    is_fzv_version_dir(directory) || is_fzv_zls_dir(directory)
 }
 
 /// The Zig version directory fzv put in the user `PATH`, if any.
@@ -66,27 +107,41 @@ pub fn active_zig_dir() -> Result<Option<PathBuf>> {
     Ok(zig_dir_in_path(&read_user_path()?))
 }
 
-/// Makes `<root>\<version>` the active version by replacing the single fzv Zig
-/// directory in the user `PATH`.
+/// Makes `<root>\<version>` (and, when installed, `<root>\zls`) the active
+/// selection by replacing the fzv directories in the user `PATH`.
 pub fn activate(root: &Path, version: &Version) -> Result<Activation> {
-    let directory = root.join(version.as_str());
-    let executable = zig_executable_in(&directory);
+    let zig_directory = root.join(version.as_str());
+    let executable = zig_executable_in(&zig_directory);
     if !executable.is_file() {
         return Err(err!(
             "cannot activate Zig {version}; {} does not exist",
             executable.display()
         ));
     }
-    let (saved, dropped) = rewrite(Some(&directory), root)?;
-    let wanted_key = path_util::path_key(&directory.to_string_lossy(), style());
-    if !saved
-        .split(style().separator)
-        .any(|entry| path_util::path_key(entry, style()) == wanted_key)
-    {
-        return Err(err!(
-            "the user PATH was not saved with the Zig directory: {}",
-            directory.display()
-        ));
+    // ZLS is a single shared installation, so it becomes reachable alongside the
+    // Zig version that is being activated.
+    let zls_directory = root.join("zls");
+    let mut wanted: Vec<&Path> = vec![&zig_directory];
+    let zls = zls_directory
+        .join(zls_executable())
+        .is_file()
+        .then_some(zls_directory.clone());
+    if let Some(directory) = &zls {
+        wanted.push(directory);
+    }
+
+    let (saved, dropped) = rewrite(&wanted, root)?;
+    for entry in &wanted {
+        let wanted_key = path_util::path_key(&entry.to_string_lossy(), style());
+        if !saved
+            .split(style().separator)
+            .any(|value| path_util::path_key(value, style()) == wanted_key)
+        {
+            return Err(err!(
+                "the user PATH was not saved with {}",
+                entry.display()
+            ));
+        }
     }
 
     let mut notes: Vec<String> = dropped
@@ -94,12 +149,16 @@ pub fn activate(root: &Path, version: &Version) -> Result<Activation> {
         .map(|entry| format!("dropped stale PATH entry: {entry}"))
         .collect();
     notes.push("restart this terminal before running 'zig'".to_string());
-    Ok(Activation { directory, notes })
+    Ok(Activation {
+        zig_directory,
+        zls_directory: zls,
+        notes,
+    })
 }
 
-/// Removes every fzv-managed Zig directory from the user `PATH`.
+/// Removes every fzv-managed directory from the user `PATH`.
 pub fn deactivate(root: &Path) -> Result<()> {
-    let (_, dropped) = rewrite(None, root)?;
+    let (_, dropped) = rewrite(&[], root)?;
     for entry in dropped {
         eprintln!("fzv: dropped stale PATH entry: {entry}");
     }
@@ -108,7 +167,7 @@ pub fn deactivate(root: &Path) -> Result<()> {
 
 /// Rewrites the user `PATH` for `root`, returning the saved value and the entries
 /// that were dropped.
-fn rewrite(wanted: Option<&Path>, root: &Path) -> Result<(String, Vec<String>)> {
+fn rewrite(wanted: &[&Path], root: &Path) -> Result<(String, Vec<String>)> {
     use winreg::{
         RegKey, RegValue,
         enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_EXPAND_SZ, REG_SZ},
@@ -122,7 +181,7 @@ fn rewrite(wanted: Option<&Path>, root: &Path) -> Result<(String, Vec<String>)> 
         .get_raw_value(PATH_VALUE)
         .map(|value| value.vtype)
         .unwrap_or(REG_SZ);
-    let new_path = path_util::rewrite_path(&old_path, root, wanted, style(), zig_executable());
+    let new_path = path_util::rewrite_path(&old_path, root, wanted, style(), is_fzv_directory);
     let dropped = path_util::dropped_entries(&old_path, &new_path, wanted, style());
 
     // Keep the registry value type (REG_EXPAND_SZ is common for PATH).

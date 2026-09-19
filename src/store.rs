@@ -10,6 +10,15 @@ use std::path::{Path, PathBuf};
 /// Name of the state directory inside a versions directory.
 pub const STATE_DIR: &str = ".fzv";
 
+/// Whether `root` is one of fzv's versions directories.
+///
+/// Every install takes an install lock first, so the state directory exists as
+/// soon as fzv has touched a versions directory — which makes this a reliable
+/// marker even when a version directory is empty (an interrupted install).
+pub fn is_versions_root(root: &Path) -> bool {
+    root.join(STATE_DIR).is_dir()
+}
+
 /// The state directory for `root`, creating it on demand.
 pub fn state_dir(root: &Path) -> Result<PathBuf> {
     let directory = root.join(STATE_DIR);
