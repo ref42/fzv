@@ -6,7 +6,7 @@
 //! points at another.
 
 use crate::cli;
-use crate::cli::args::Options;
+use crate::cli::args::{self, Options};
 use crate::cli::prompt;
 use crate::error::Result;
 use crate::index::{self, Index};
@@ -44,18 +44,16 @@ pub fn run(options: &Options) -> Result<()> {
     }
     sort_desc(&mut selected);
 
-    install::ensure_zls(&root)?;
+    let jobs = options.jobs.unwrap_or(args::DEFAULT_JOBS);
+    install::ensure_zls(&root, jobs)?;
     for version in &selected {
-        install::ensure_zig(&root, version)?;
+        install::ensure_zig(&root, version, jobs)?;
         eprintln!("installed {version}");
     }
 
     if options.path.is_some() {
         let activation = platform::activate(&root, &selected[0])?;
-        cli::report_activation(&selected[0], &activation, options.print_path);
-        if options.print_path {
-            cli::report_session_path(&root);
-        }
+        cli::report_activation(&selected[0], &activation);
     }
     Ok(())
 }

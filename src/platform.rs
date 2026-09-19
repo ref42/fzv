@@ -150,25 +150,6 @@ impl Activation {
     }
 }
 
-/// The `PATH` value the calling shell should adopt to use the current selection
-/// right away.
-///
-/// A child process cannot change its parent's environment, so this is *returned*
-/// rather than applied: the shell assigns it (`$env:PATH = (fzv use <v>
-/// --print-path)`). It is derived from the environment fzv inherited, so entries
-/// that only exist in that session (a toolchain prompt, a virtualenv) survive
-/// while the previous fzv entries are replaced.
-pub fn session_path(root: &Path) -> String {
-    let current = std::env::var("PATH").unwrap_or_default();
-    path_util::rewrite_path(
-        &current,
-        root,
-        &[crate::store::shim_dir(root).as_path()],
-        style(),
-        is_fzv_directory,
-    )
-}
-
 /// Whether `directory` is one of the version directories fzv creates.
 ///
 /// An install that was interrupted can leave the directory empty, or with the

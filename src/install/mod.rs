@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 pub use checksum::verify_sha256;
 
 /// Installs `version` below `root` if needed and returns its executable.
-pub fn ensure_zig(root: &Path, version: &Version) -> Result<PathBuf> {
+pub fn ensure_zig(root: &Path, version: &Version, jobs: usize) -> Result<PathBuf> {
     let directory = root.join(version.as_str());
     let executable = platform::zig_executable_in(&directory);
     if executable.is_file() {
@@ -49,7 +49,7 @@ pub fn ensure_zig(root: &Path, version: &Version) -> Result<PathBuf> {
         }
     }
     if !archive_path.is_file() {
-        crate::download::download(&archive.url, &archive_path, &format!("Zig {version}"))?;
+        crate::download::download(&archive.url, &archive_path, &format!("Zig {version}"), jobs)?;
         if let Err(error) = verify_sha256(&archive_path, archive.sha256.as_deref()) {
             // Never leave bytes that failed verification behind.
             let _ = std::fs::remove_file(&archive_path);
@@ -64,7 +64,7 @@ pub fn ensure_zig(root: &Path, version: &Version) -> Result<PathBuf> {
 }
 
 /// Installs ZLS below `root` if needed and returns its executable.
-pub fn ensure_zls(root: &Path) -> Result<PathBuf> {
+pub fn ensure_zls(root: &Path, jobs: usize) -> Result<PathBuf> {
     let directory = root.join("zls");
     let executable = directory.join(platform::zls_executable());
     if executable.is_file() {
@@ -94,7 +94,7 @@ pub fn ensure_zls(root: &Path) -> Result<PathBuf> {
         detail!("fzv: downloading ZLS (no published checksum; not verifying)");
         let mut last_error = None;
         for attempt in 1..=3 {
-            match crate::download::download(&url, &archive_path, "ZLS") {
+            match crate::download::download(&url, &archive_path, "ZLS", jobs) {
                 Ok(()) => break,
                 Err(error) => {
                     if attempt < 3 {
@@ -191,7 +191,7 @@ mod tests {
         let executable = platform::zig_executable_in(&directory);
         std::fs::write(&executable, b"exe").unwrap();
         assert_eq!(
-            ensure_zig(&root, &Version::parse("0.14.1").unwrap()).unwrap(),
+            ensure_zig(&root, &Version::parse("0.14.1").unwrap(), 1).unwrap(),
             executable
         );
         std::fs::remove_dir_all(root).unwrap();

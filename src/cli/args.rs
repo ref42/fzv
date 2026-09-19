@@ -1,9 +1,14 @@
 //! Command line parsing.
 //!
 //! fzv's commands share one option shape — positional version selectors plus
-//! `--path DIR` (and `--yes` for `rm`) — so they are parsed in one place. The
-//! path argument is validated here as well, because that is where the most
-//! common user mistake can be diagnosed.
+//! `-path DIR` (and `-yes` for `rm`) — so they are parsed in one place. The path
+//! argument is validated here as well, because that is where the most common
+//! user mistake can be diagnosed.
+//!
+//! Options are written the way a Windows tool writes them, with one dash
+//! (`-path`, `-j 4`), which is also what the shells fzv runs in use for their
+//! own parameters. The two-dash forms (`--path`, `--jobs`) are accepted as well,
+//! and names are case-insensitive, so `-Path` and `--PATH` both work.
 
 use crate::error::{Result, err};
 use crate::path_util::{self, PathStyle};
@@ -12,6 +17,11 @@ use std::path::PathBuf;
 /// Advice shown when an argument looks like the shell deleted its backslashes.
 const SHELL_ESCAPED_PATH_HINT: &str = "\nBoth separators are supported, but fzv received exactly the text above: if you typed 'D:\\PL_Collections\\zig', your shell deleted the backslashes.\nQuote the value ('D:\\PL_Collections\\zig') or write it with forward slashes (D:/PL_Collections/zig).";
 
+/// Download connections per archive, when `-j` does not say otherwise.
+pub const DEFAULT_JOBS: usize = 8;
+/// The range `-j` accepts: one connection is a single stream.
+const MAX_JOBS: usize = 32;
+
 /// The options a command receives.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Options {
@@ -19,13 +29,14 @@ pub struct Options {
     pub positionals: Vec<String>,
     /// An explicit versions directory.
     pub path: Option<PathBuf>,
-    /// `--yes`: skip a confirmation prompt.
+    /// `-yes`: skip a confirmation prompt.
     pub yes: bool,
-    /// `--force`: install even when there is nothing newer to install.
+    /// `-force`: install even when there is nothing newer to install.
     pub force: bool,
-    /// `--print-path`: print the `PATH` value for the current shell on stdout,
-    /// so the selection takes effect without restarting the terminal.
-    pub print_path: bool,
+    /// `-verbose`: also print the diagnostics behind the normal output.
+    pub verbose: bool,
+    /// `-j N`: how many connections an archive is fetched over.
+    pub jobs: Option<usize>,
 }
 
 impl Options {
@@ -33,24 +44,30 @@ impl Options {
         let mut options = Options::default();
         let mut index = 0;
         while index < args.len() {
-            match args[index].as_str() {
-                "--path" => {
+            let value = args[index].as_str();
+            match option_name(value).as_deref() {
+                Some("path") => {
                     index += 1;
                     let value = args
                         .get(index)
-                        .ok_or_else(|| err!("--path requires a directory"))?;
+                        .ok_or_else(|| err!("-path requires a directory"))?;
                     options.path = Some(parse_directory_argument(value)?);
                 }
-                "--yes" | "-y" => options.yes = true,
-                "--force" | "-f" => options.force = true,
-                "--print-path" => options.print_path = true,
-                value if value.starts_with('-') => {
-                    return Err(err!("unknown option '{value}'"));
+                Some("yes") | Some("y") => options.yes = true,
+                Some("force") | Some("f") => options.force = true,
+                Some("verbose") => options.verbose = true,
+                Some("j") | Some("jobs") => {
+                    index += 1;
+                    let value = args
+                        .get(index)
+                        .ok_or_else(|| err!("-j requires a number of connections"))?;
+                    options.jobs = Some(parse_jobs(value)?);
                 }
+                Some(name) => return Err(err!("unknown option '{name}'")),
                 // Selectors may be separated by spaces or commas, so both
                 // `fzv get dev stable` and `fzv get dev,stable` work. Version
                 // strings never contain a comma, so splitting is safe.
-                value => options.positionals.extend(
+                None => options.positionals.extend(
                     value
                         .split(',')
                         .map(str::trim)
@@ -62,6 +79,30 @@ impl Options {
         }
         Ok(options)
     }
+}
+
+/// The option a token names, if it is one: `-j` and `--j` and `-J` all become
+/// `"j"`, so both dashes and any case work.
+fn option_name(token: &str) -> Option<String> {
+    let name = token
+        .strip_prefix("--")
+        .or_else(|| token.strip_prefix('-'))?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(name.to_ascii_lowercase())
+}
+
+/// Validates the value of `-j`.
+fn parse_jobs(value: &str) -> Result<usize> {
+    let jobs = value
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| err!("-j expects a number of connections, not '{value}'"))?;
+    if !(1..=MAX_JOBS).contains(&jobs) {
+        return Err(err!("-j expects a number from 1 to {MAX_JOBS}"));
+    }
+    Ok(jobs)
 }
 
 /// Validates a directory typed by the user.
@@ -123,13 +164,62 @@ mod tests {
         assert_eq!(options.positionals, ["update"]);
         assert!(Options::parse(&["-f".to_string()]).unwrap().force);
 
-        let args: Vec<String> = ["use", "0.16.0", "--print-path"]
+        let args: Vec<String> = ["use", "0.16.0"]
             .iter()
             .map(|part| part.to_string())
             .collect();
         let options = Options::parse(&args).unwrap();
-        assert!(options.print_path);
         assert_eq!(options.positionals, ["use", "0.16.0"]);
+        // `-print-path` is gone; it is not silently accepted.
+        let error = Options::parse(&["-print-path".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown option"), "{error}");
+    }
+
+    /// One dash, two dashes and any case all name the same option, because that
+    /// is what the shells fzv runs in accept for their own parameters.
+    #[test]
+    fn accepts_windows_and_posix_option_spellings() {
+        let parse = |args: &[&str]| -> Options {
+            let args: Vec<String> = args.iter().map(|part| part.to_string()).collect();
+            Options::parse(&args).unwrap()
+        };
+        for spelling in ["-path", "--path", "-Path", "--PATH"] {
+            assert_eq!(
+                parse(&[spelling, r"D:\zig"]).path,
+                Some(PathBuf::from(r"D:\zig")),
+                "{spelling}"
+            );
+        }
+        for spelling in ["-yes", "--yes", "-Y", "--YES"] {
+            assert!(parse(&[spelling]).yes, "{spelling}");
+        }
+        for spelling in ["-verbose", "--verbose", "-VERBOSE"] {
+            assert!(parse(&[spelling]).verbose, "{spelling}");
+        }
+        for spelling in ["-force", "--force", "-F"] {
+            assert!(parse(&[spelling]).force, "{spelling}");
+        }
+        for spelling in ["-j", "--j", "-J", "-jobs", "--jobs"] {
+            assert_eq!(parse(&[spelling, "4"]).jobs, Some(4), "{spelling}");
+        }
+    }
+
+    #[test]
+    fn validates_the_connection_count() {
+        let jobs = |value: &str| -> Result<Options> {
+            Options::parse(&["-j".to_string(), value.to_string()])
+        };
+        assert_eq!(jobs("1").unwrap().jobs, Some(1), "-j 1 is a single stream");
+        assert_eq!(jobs("32").unwrap().jobs, Some(32));
+        for bad in ["0", "33", "-1", "many", ""] {
+            let error = jobs(bad).unwrap_err().to_string();
+            assert!(error.contains("-j"), "{bad}: {error}");
+        }
+        // A missing value is reported, not ignored.
+        let error = Options::parse(&["-j".to_string()]).unwrap_err().to_string();
+        assert!(error.contains("requires a number"), "{error}");
     }
 
     #[test]

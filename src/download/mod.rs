@@ -10,8 +10,8 @@
 //! different bytes than ziglang.org publishes.
 //!
 //! A transfer draws one progress bar (see [`crate::progress`]); the diagnostics
-//! around it need `FZV_VERBOSE`. The archive is moved into place atomically, so
-//! a partial file is never mistaken for a finished one.
+//! around it need `-verbose`. The archive is moved into place atomically, so a
+//! partial file is never mistaken for a finished one.
 
 mod mirrors;
 mod segments;
@@ -22,13 +22,13 @@ use crate::progress::Progress;
 use mirrors::{Sources, is_source_failure, select_download_sources};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::{env, fs, process};
+use std::{fs, process};
 
 /// Downloads `url` into `output` under the name `label`, keeping the partial
 /// file so that an interrupted transfer can be resumed by a later run.
-pub fn download(url: &str, output: &Path, label: &str) -> Result<()> {
+pub fn download(url: &str, output: &Path, label: &str, jobs: usize) -> Result<()> {
     let temporary = output.with_extension("downloading");
-    download_into(url, output, &temporary, true, label, false)
+    download_into(url, output, &temporary, true, label, false, jobs)
 }
 
 /// A small text resource that was fetched, and the URL it finally came from.
@@ -89,7 +89,7 @@ pub fn download_once(url: &str, output: &Path) -> Result<()> {
     name.push(format!(".{}.downloading", process::id()));
     let temporary = PathBuf::from(name);
     // The index is a few kilobytes: a bar for it would only flicker past.
-    let result = download_into(url, output, &temporary, false, &label, true);
+    let result = download_into(url, output, &temporary, false, &label, true, 1);
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
@@ -103,6 +103,7 @@ fn download_into(
     resume: bool,
     label: &str,
     quiet: bool,
+    jobs: usize,
 ) -> Result<()> {
     let url = url.to_string();
     let output = output.to_path_buf();
@@ -110,9 +111,9 @@ fn download_into(
     let label = label.to_string();
     tokio::runtime::Runtime::new()
         .map_err(|e| err!("unable to start async runtime: {e}"))?
-        .block_on(
-            async move { download_async(&url, &output, &temporary, resume, &label, quiet).await },
-        )
+        .block_on(async move {
+            download_async(&url, &output, &temporary, resume, &label, quiet, jobs).await
+        })
 }
 
 async fn download_async(
@@ -122,14 +123,11 @@ async fn download_async(
     resume: bool,
     label: &str,
     quiet: bool,
+    jobs: usize,
 ) -> Result<()> {
     use std::time::Duration;
 
-    let jobs = env::var("FZV_DOWNLOAD_JOBS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(8)
-        .clamp(1, 32);
+    let jobs = jobs.clamp(1, 32);
     let client = reqwest::Client::builder()
         .user_agent("fzv/0.1")
         .connect_timeout(Duration::from_secs(20))

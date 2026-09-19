@@ -3,13 +3,17 @@
 //! By default fzv prints only what a user has to act on: how far a download is,
 //! what was installed, which version is now active, and errors. The details that
 //! help when something is wrong (which mirror was picked, which checksum
-//! matched, where an archive was unpacked) are noise when it is not, so they need
-//! `FZV_VERBOSE`.
+//! matched, where an archive was unpacked) are printed when `-verbose` asks for
+//! them.
 
-use std::ffi::OsString;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Prints a diagnostic line, but only when `FZV_VERBOSE` asked for detail.
+/// Whether `-verbose` was given. The command line sets this once, before any
+/// work starts, so the layers below can ask without it being threaded through
+/// every call.
+static VERBOSE: AtomicBool = AtomicBool::new(false);
+
+/// Prints a diagnostic line, but only when `-verbose` asked for detail.
 macro_rules! detail {
     ($($arg:tt)*) => {
         if $crate::log::verbose() {
@@ -22,34 +26,23 @@ pub(crate) use detail;
 
 /// Whether diagnostic detail was asked for.
 pub fn verbose() -> bool {
-    static VERBOSE: OnceLock<bool> = OnceLock::new();
-    *VERBOSE.get_or_init(|| requested(std::env::var_os("FZV_VERBOSE")))
+    VERBOSE.load(Ordering::Relaxed)
 }
 
-/// `FZV_VERBOSE=0`, `=no`, `=off` and `=false` all mean "no detail, thanks".
-fn requested(value: Option<OsString>) -> bool {
-    let Some(value) = value else {
-        return false;
-    };
-    let value = value.to_string_lossy().trim().to_ascii_lowercase();
-    !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
+/// Remembers that `-verbose` was given.
+pub fn set_verbose(verbose: bool) {
+    VERBOSE.store(verbose, Ordering::Relaxed);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::requested;
+    use super::{set_verbose, verbose};
 
     #[test]
-    fn only_an_explicit_request_is_verbose() {
-        assert!(!requested(None));
-        for value in ["", " ", "0", "false", "FALSE", "no", "off"] {
-            assert!(
-                !requested(Some(value.into())),
-                "{value:?} should stay quiet"
-            );
-        }
-        for value in ["1", "true", "yes", "on", "2"] {
-            assert!(requested(Some(value.into())), "{value:?} should be verbose");
-        }
+    fn the_flag_is_what_turns_detail_on() {
+        set_verbose(true);
+        assert!(verbose());
+        set_verbose(false);
+        assert!(!verbose());
     }
 }

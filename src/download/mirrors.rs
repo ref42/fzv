@@ -14,7 +14,6 @@
 use crate::log::detail;
 use crate::progress::Spinner;
 use reqwest::StatusCode;
-use std::env;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -201,25 +200,8 @@ pub(super) fn is_source_failure(status: StatusCode) -> bool {
 }
 
 /// The base URLs to consider, best first, before probing.
-///
-/// `FZV_MIRRORS` replaces the built-in list entirely (comma or space separated),
-/// `FZV_MIRROR` keeps the list to a single mirror.
-pub(super) fn candidate_bases(list: Option<&str>, single: Option<&str>) -> Vec<String> {
-    if let Some(single) = single {
-        let single = single.trim();
-        if !single.is_empty() {
-            return vec![single.trim_end_matches('/').to_string()];
-        }
-    }
-    match list {
-        Some(list) if !list.trim().is_empty() => list
-            .split([',', ' ', ';'])
-            .map(str::trim)
-            .filter(|base| !base.is_empty())
-            .map(|base| base.trim_end_matches('/').to_string())
-            .collect(),
-        _ => ZIG_MIRRORS.iter().map(|base| base.to_string()).collect(),
-    }
+pub(super) fn candidate_bases() -> Vec<String> {
+    ZIG_MIRRORS.iter().map(|base| base.to_string()).collect()
 }
 
 /// The sources for `output`, best first, ending with `official_url`.
@@ -243,17 +225,11 @@ pub(super) async fn select_download_sources(
     let Some(filename) = output.file_name().and_then(|name| name.to_str()) else {
         return Sources::new(vec![official]);
     };
-    if !filename.starts_with("zig-")
-        || !filename.ends_with(".zip")
-        || env::var_os("FZV_NO_MIRRORS").is_some()
-    {
+    if !filename.starts_with("zig-") || !filename.ends_with(".zip") {
         return Sources::new(vec![official]);
     }
 
-    let bases = candidate_bases(
-        env::var("FZV_MIRRORS").ok().as_deref(),
-        env::var("FZV_MIRROR").ok().as_deref(),
-    );
+    let bases = candidate_bases();
     let candidates: Vec<String> = bases
         .into_iter()
         .map(|base| format!("{base}/{filename}?source=fzv"))
@@ -386,7 +362,7 @@ pub(super) async fn select_download_sources(
     }
     // An archive nobody has cached yet is fetched from ziglang.org, which does
     // have it, rather than from a mirror that would stream it slowly.
-    if warming && env::var_os("FZV_MIRROR").is_none() {
+    if warming {
         detail!("fzv: the mirrors are warming this archive; starting at ziglang.org");
         sources.insert(0, official.clone());
     }
@@ -425,28 +401,16 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_mirror_list_from_the_environment() {
-        assert_eq!(
-            candidate_bases(Some("https://a/zig, https://b/zig;https://c/zig"), None),
-            ["https://a/zig", "https://b/zig", "https://c/zig"]
-        );
-        assert_eq!(
-            candidate_bases(Some("https://a/zig"), Some("https://only/zig")),
-            ["https://only/zig"],
-            "a single mirror wins over the list"
-        );
-        assert_eq!(
-            candidate_bases(None, Some("https://only/zig/")),
-            ["https://only/zig"],
-            "a trailing slash is dropped"
+    fn the_built_in_mirror_list_is_used() {
+        let bases = candidate_bases();
+        assert!(bases.len() > 8, "{} mirrors", bases.len());
+        assert!(
+            bases.iter().all(|base| base.starts_with("https://")),
+            "{bases:?}"
         );
         assert!(
-            candidate_bases(None, None).len() > 8,
-            "the built-in list is used by default"
-        );
-        assert!(
-            candidate_bases(Some("  "), Some("  ")).len() > 8,
-            "blank values fall back to the built-in list"
+            bases.iter().all(|base| !base.ends_with('/')),
+            "a trailing slash would double up in an asset URL: {bases:?}"
         );
     }
 

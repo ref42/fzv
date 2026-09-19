@@ -58,7 +58,7 @@ impl Index {
             .ok()
             .and_then(|modified| modified.elapsed().ok())
             .is_none_or(|age| age > INDEX_MAX_AGE);
-        if cached.is_none() || stale || std::env::var_os("FZV_REFRESH_INDEX").is_some() {
+        if cached.is_none() || stale {
             match crate::download::download_once(INDEX_URL, &path) {
                 Ok(()) => return std::fs::read_to_string(&path).map_err(crate::error::Error::from),
                 Err(error) => match cached {

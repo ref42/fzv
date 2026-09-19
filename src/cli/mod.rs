@@ -78,7 +78,7 @@ fn active_tool_from_path(tool: &str) -> Result<PathBuf> {
     let executable = if tool == "zig" {
         platform::zig_executable_in(&active)
     } else {
-        crate::install::ensure_zls(&root)?
+        crate::install::ensure_zls(&root, args::DEFAULT_JOBS)?
     };
     if !executable.is_file() {
         return Err(err!(
@@ -87,6 +87,14 @@ fn active_tool_from_path(tool: &str) -> Result<PathBuf> {
         ));
     }
     Ok(executable)
+}
+
+/// Parses a command's options, and applies what they say about the rest of the
+/// process (`-verbose` decides what the layers below print).
+fn options(args: &[String]) -> Result<Options> {
+    let options = Options::parse(args)?;
+    crate::log::set_verbose(options.verbose);
+    Ok(options)
 }
 
 fn dispatch(args: &[String]) -> Result<()> {
@@ -103,13 +111,13 @@ fn dispatch(args: &[String]) -> Result<()> {
             println!("{}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        "ls" => commands::ls::run(&Options::parse(rest)?),
-        "lls" => commands::lls::run(&Options::parse(rest)?),
-        "path" => commands::path::run(&Options::parse(rest)?),
-        "get" => commands::get::run(&Options::parse(rest)?),
-        "rm" => commands::rm::run(&Options::parse(rest)?),
-        "use" => commands::use_version::run(&Options::parse(rest)?),
-        "update" | "upgrade" => commands::update::run(&Options::parse(rest)?),
+        "ls" => commands::ls::run(&options(rest)?),
+        "lls" => commands::lls::run(&options(rest)?),
+        "path" => commands::path::run(&options(rest)?),
+        "get" => commands::get::run(&options(rest)?),
+        "rm" => commands::rm::run(&options(rest)?),
+        "use" => commands::use_version::run(&options(rest)?),
+        "update" | "upgrade" => commands::update::run(&options(rest)?),
         command => Err(err!(
             "unknown fzv command '{command}'; run 'fzv h' for help"
         )),
@@ -122,18 +130,27 @@ fn print_help() {
 
 Manage Zig versions that are switched by a single entry in your PATH.
 
-  ls [--path DIR]              list available Zig versions
-  lls [--path DIR]             list versions installed in the versions directory
-  get [VERSION...] [--path DIR] [--print-path]  download versions (choose when omitted)
-  rm [VERSION...] [--yes] [--path DIR]  remove installed versions
-  use [VERSION] [--path DIR] [--print-path]  activate a version
+  ls [-path DIR]               list available Zig versions
+  lls [-path DIR]              list versions installed in the versions directory
+  get [VERSION...] [-path DIR] [-j N]  download versions (choose when omitted)
+  rm [VERSION...] [-yes] [-path DIR]  remove installed versions
+  use [VERSION] [-path DIR]    activate a version
   path                         show the versions directory and the active version
-  update [--force]             replace fzv with the newest GitHub release
+  update [-force]              replace fzv with the newest GitHub release
   v                            print fzv version
   h                            show this help
 
-'--force' installs the newest release even when it is the version already
-running, which is how a broken installation is repaired.
+Options are written with one dash, the way Windows tools write them; two dashes
+and any case work as well ('--Path', '-PATH'). The ones that apply everywhere:
+
+  -path DIR      work in this versions directory (otherwise taken from PATH)
+  -yes, -y       skip a confirmation prompt ('rm')
+  -verbose       also print the mirror that was chosen, the checksums, and
+                 where an archive was unpacked
+  -j N           connections per archive ('get', 1 to 32; default 8, and '-j 1'
+                 fetches with a single stream)
+  -force         'update': install the newest release even when it is the
+                 version already running
 
 Selectors:
   dev, master, latest   the newest development snapshot (published under /builds)
@@ -141,8 +158,8 @@ Selectors:
   0.16.0                an exact version
 
 Several selectors can be given at once, separated by spaces or commas:
-  fzv get dev stable --path D:\\zig
-  fzv get dev,stable --path D:\\zig
+  fzv get dev stable -path D:\\zig
+  fzv get dev,stable -path D:\\zig
 
 How it works:
   * fzv keeps copies of itself named 'zig.exe' and 'zls.exe' in
@@ -156,35 +173,19 @@ How it works:
     that starts refusing requests - '429 Too Many Requests' is common on a public
     service - is dropped at once and the transfer continues from the next one,
     which matters more than which mirror was fastest.
-  * The versions directory is taken from '--path DIR' when given, otherwise
+  * The versions directory is taken from '-path DIR' when given, otherwise
     from the fzv entry already in PATH.
-  * With '--path DIR', 'get' installs there and then activates the newest of
+  * With '-path DIR', 'get' installs there and then activates the newest of
     the versions it installed, so later commands need no path.
   * Everything fzv keeps for a versions directory lives in '<versions>\\.fzv'
     (its shims, index cache and install locks); the only files it writes
     elsewhere are the two shim copies next to this executable.
   * If this executable sits somewhere PATH does not reach (or cannot be written
-    to), the shims next to it are not possible and the terminal you are in has to
-    pick up the PATH entry once - restart it, or apply what '--print-path' prints
-    (status goes to stderr):
-
-      PowerShell   $env:PATH = (fzv use 0.16.0 --print-path)
-      bash, zsh    export PATH=\"$(fzv use 0.16.0 --print-path)\"
-      cmd          for /f \"delims=\" %p in ('fzv use 0.16.0 --print-path') do set \"PATH=%p\"
-      nushell      $env.PATH = (fzv use 0.16.0 --print-path | split row (char esep))
+    to), those copies are not possible and the terminal you are in has to be
+    restarted once to see the new PATH entry. New terminals are always fine.
 
 Paths: both \\ and / are accepted. Quote the value (\"D:\\PL_Collections\\zig\")
-when your shell would otherwise strip the backslashes.
-
-Environment:
-  FZV_MIRROR                 download from a single mirror (for example https://example.org/zig)
-  FZV_MIRRORS                mirrors to try, separated by commas (replaces the built-in list)
-  FZV_NO_MIRRORS             always download from ziglang.org
-  FZV_DOWNLOAD_JOBS          number of parallel download segments (default 8)
-  FZV_REFRESH_INDEX          ignore the cached download index
-  FZV_VERBOSE                also print mirror choice, checksums and unpacking
-  FZV_REPO                   update from another repository (default ref42/fzv)
-  FZV_RELEASES_URL           update from a GitHub Enterprise or internal server"
+when your shell would otherwise strip the backslashes."
     );
 }
 
@@ -242,7 +243,7 @@ pub fn is_active_version(root: &Path, directory: &Path) -> bool {
 /// machine-readable `PATH` value `--print-path` produces. By default only the
 /// active version is printed - which directories are in play, and whether `PATH`
 /// changed, is [`crate::log`] detail.
-pub fn report_activation(version: &Version, activation: &platform::Activation, apply_now: bool) {
+pub fn report_activation(version: &Version, activation: &platform::Activation) {
     eprintln!("active Zig version: {version}");
     detail!(
         "fzv: zig directory: {}",
@@ -258,9 +259,7 @@ pub fn report_activation(version: &Version, activation: &platform::Activation, a
     for note in &activation.notes {
         detail!("fzv: {note}");
     }
-    if apply_now {
-        detail!("fzv: the calling shell applies the printed PATH");
-    } else if activation.immediate {
+    if activation.immediate {
         detail!("fzv: zig is already reachable in this terminal");
     } else {
         report_session_pickup(&activation.zig_directory);
@@ -282,18 +281,7 @@ fn report_session_pickup(zig_directory: &Path) {
         detail!("fzv: this terminal still predates the PATH entry");
         return;
     }
-    eprintln!(
-        "hint: restart this terminal to use zig in it (or apply the '--print-path' \
-         one-liner from 'fzv h')"
-    );
-}
-
-/// Prints the `PATH` value the calling shell should adopt.
-///
-/// See [`platform::session_path`]: a process cannot change its parent's
-/// environment, so `fzv use` hands the value to the shell instead.
-pub fn report_session_path(root: &Path) {
-    println!("{}", platform::session_path(root));
+    eprintln!("hint: restart this terminal to use zig in it");
 }
 
 #[cfg(test)]

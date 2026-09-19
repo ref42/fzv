@@ -21,7 +21,7 @@
 //!     progress.rs      the progress bar and spinner (indicatif)
 //!     store.rs         where fzv's own files live
 //!     json.rs          a small JSON reader
-//!     log.rs           what is printed by default, and what needs `FZV_VERBOSE`
+//!     log.rs           what is printed by default, and what needs `-verbose`
 //!     error.rs         Error / Result
 //! ```
 //!

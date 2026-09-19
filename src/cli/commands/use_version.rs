@@ -5,7 +5,7 @@
 //! fzv about what is active.
 
 use crate::cli;
-use crate::cli::args::Options;
+use crate::cli::args::{self, Options};
 use crate::cli::prompt;
 use crate::error::{Result, err};
 use crate::index;
@@ -48,14 +48,11 @@ pub fn run(options: &Options) -> Result<()> {
         }
     };
 
-    let executable = install::ensure_zig(&root, &version)?;
-    let zls = install::ensure_zls(&root)?;
+    let executable = install::ensure_zig(&root, &version, args::DEFAULT_JOBS)?;
+    let zls = install::ensure_zls(&root, args::DEFAULT_JOBS)?;
     let activation = platform::activate(&root, &version)?;
-    cli::report_activation(&version, &activation, options.print_path);
+    cli::report_activation(&version, &activation);
     detail!("fzv: zig executable: {}", executable.display());
     detail!("fzv: zls executable: {}", zls.display());
-    if options.print_path {
-        cli::report_session_path(&root);
-    }
     Ok(())
 }

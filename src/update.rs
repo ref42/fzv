@@ -49,34 +49,10 @@ impl Releases {
         }
     }
 
-    /// A GitHub Enterprise server, or any server that lays releases out the way
-    /// GitHub does. The API lives under its own prefix there.
-    pub fn enterprise(base: &str, repo: &str) -> Releases {
-        let base = base.trim_end_matches('/');
-        Releases {
-            api: format!("{base}/api/v3/repos/{repo}/releases/latest"),
-            web: format!("{base}/{repo}/releases/latest"),
-            download: format!("{base}/{repo}/releases/download"),
-        }
-    }
-
-    /// Where to look: `FZV_RELEASES_URL` (a GitHub Enterprise or internal
-    /// server) and `FZV_REPO`, both optional.
+    /// The repository fzv's own releases come from.
     pub fn configured() -> Releases {
-        let repo = setting("FZV_REPO").unwrap_or_else(|| DEFAULT_REPO.to_string());
-        match setting("FZV_RELEASES_URL") {
-            Some(base) => Releases::enterprise(&base, &repo),
-            None => Releases::github(&repo),
-        }
+        Releases::github(DEFAULT_REPO)
     }
-}
-
-/// An environment setting, with empty values treated as unset.
-fn setting(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 /// What an update did.
@@ -171,6 +147,7 @@ fn install(
         &asset_url(releases, release, name),
         &archive_path,
         &format!("fzv {version}"),
+        crate::cli::args::DEFAULT_JOBS,
     )?;
     match published_checksum(releases, release, name) {
         Some(expected) => checksum::verify_sha256(&archive_path, Some(&expected))?,
