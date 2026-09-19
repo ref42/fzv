@@ -481,15 +481,34 @@ mod tests {
 
     const TOTAL: usize = 6 * 1024 * 1024;
 
-    fn temp_dir(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "fzv-download-{label}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        root
+    /// A scratch directory that removes itself.
+    ///
+    /// These tests write whole multi-megabyte archives, and a failing assertion
+    /// leaves a directory behind if the cleanup is the last statement of the
+    /// test - which is exactly when the temp directory fills up.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(label: &str) -> Scratch {
+            let root = std::env::temp_dir().join(format!(
+                "fzv-download-{label}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            Scratch(root)
+        }
+
+        fn join(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     fn payload(len: usize) -> Arc<Vec<u8>> {
@@ -699,7 +718,8 @@ mod tests {
     fn the_archive_is_fetched_over_several_connections() {
         let payload = payload(TOTAL);
         let server = Server::start(Arc::clone(&payload), true, usize::MAX);
-        let path = temp_dir("several").join("zig-test.zip.downloading");
+        let root = Scratch::new("several");
+        let path = root.join("zig-test.zip.downloading");
 
         run(&server.url("zig-test.zip"), &path, 4).unwrap();
 
@@ -718,7 +738,8 @@ mod tests {
     #[test]
     fn an_interrupted_transfer_resumes_from_its_chunks() {
         let payload = payload(TOTAL);
-        let path = temp_dir("resume").join("zig-test.zip.downloading");
+        let root = Scratch::new("resume");
+        let path = root.join("zig-test.zip.downloading");
         let (chunk, _) = plan(TOTAL as u64, 1);
 
         let broken = Server::start(Arc::clone(&payload), true, 3);
@@ -744,7 +765,8 @@ mod tests {
     fn a_server_without_range_support_is_reported() {
         let payload = payload(TOTAL);
         let server = Server::start(Arc::clone(&payload), false, usize::MAX);
-        let path = temp_dir("single-stream").join("zig-test.zip.downloading");
+        let root = Scratch::new("single-stream");
+        let path = root.join("zig-test.zip.downloading");
 
         // Without ranges there is nothing to segment, and the caller has to
         // fall back to one stream; here the whole request is one range anyway.
@@ -758,7 +780,7 @@ mod tests {
 
     #[test]
     fn a_record_that_does_not_add_up_is_ignored() {
-        let directory = temp_dir("record");
+        let directory = Scratch::new("record");
         let path = directory.join("archive.downloading");
         std::fs::write(&path, vec![0u8; TOTAL]).unwrap();
         let chunk = 1024 * 1024;

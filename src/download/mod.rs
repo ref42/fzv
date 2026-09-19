@@ -474,15 +474,34 @@ mod tests {
 
     const TOTAL: usize = 6 * 1024 * 1024;
 
-    fn temp_dir(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "fzv-download-{label}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        root
+    /// A scratch directory that removes itself.
+    ///
+    /// These tests download whole multi-megabyte archives, and a failing
+    /// assertion leaves a directory behind if the cleanup is the last statement
+    /// of the test - which is exactly when the temp directory fills up.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(label: &str) -> Scratch {
+            let root = std::env::temp_dir().join(format!(
+                "fzv-download-{label}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            Scratch(root)
+        }
+
+        fn join(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     fn payload() -> Arc<Vec<u8>> {
@@ -800,7 +819,7 @@ mod tests {
     /// download stopped. It has to continue from the next mirror instead.
     #[test]
     fn continues_on_the_next_mirror_when_one_is_rate_limited() {
-        let root = temp_dir("failover");
+        let root = Scratch::new("failover");
         let payload = payload();
         let limited = Server::start(Arc::clone(&payload), 0, false);
         let healthy = Server::start(Arc::clone(&payload), usize::MAX, false);
@@ -823,14 +842,13 @@ mod tests {
             "the rate-limiting mirror should be asked exactly once"
         );
         assert!(healthy.calls() > 0, "the second mirror was never used");
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A mirror that drops the transfer half way through is replaced, and the
     /// next one continues from what is already on disk instead of starting over.
     #[test]
     fn resumes_from_the_next_mirror_after_a_dropped_transfer() {
-        let root = temp_dir("resume-failover");
+        let root = Scratch::new("resume-failover");
         let payload = payload();
         let dropping = Server::start(Arc::clone(&payload), usize::MAX, true);
         let healthy = Server::start(Arc::clone(&payload), usize::MAX, false);
@@ -855,13 +873,12 @@ mod tests {
             resumed_at > 0,
             "the transfer started over instead of resuming at {resumed_at}"
         );
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// When nothing is left, the failure is reported instead of pretending.
     #[test]
     fn reports_when_every_mirror_fails() {
-        let root = temp_dir("all-fail");
+        let root = Scratch::new("all-fail");
         let payload = payload();
         let first = Server::start(Arc::clone(&payload), 0, false);
         let second = Server::start(Arc::clone(&payload), 0, false);
@@ -881,14 +898,13 @@ mod tests {
         );
         assert!(error.to_string().contains("429"), "{error}");
         assert!(!path.exists() || std::fs::metadata(&path).unwrap().len() == 0);
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A mirror that rate limits in the middle of a chunked transfer is dropped
     /// and the remaining chunks come from the next one.
     #[test]
     fn chunked_transfers_survive_a_mirror_that_starts_refusing() {
-        let root = temp_dir("chunked-failover");
+        let root = Scratch::new("chunked-failover");
         let payload = payload();
         let limited = Server::start(Arc::clone(&payload), 3, false);
         let healthy = Server::start(Arc::clone(&payload), usize::MAX, false);
@@ -912,7 +928,6 @@ mod tests {
 
         assert_written(&path, &payload, "rate-limited mirror");
         assert!(healthy.calls() > 0, "the second mirror was never used");
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// The reported case: every mirror answers `429`, the transfer fails over to
@@ -920,7 +935,7 @@ mod tests {
     /// serve chunks - and still finishes, in chunks, from there.
     #[test]
     fn chunked_transfers_continue_on_the_official_url_after_every_mirror_refuses() {
-        let root = temp_dir("official-failover");
+        let root = Scratch::new("official-failover");
         let payload = payload();
         let limited = Server::start(Arc::clone(&payload), 0, false);
         let official = Server::start(Arc::clone(&payload), usize::MAX, false);
@@ -952,7 +967,6 @@ mod tests {
         assert_written(&path, &payload, "failover to the official URL");
         assert!(limited.calls() >= 1, "the mirror was never used");
         assert!(official.calls() > 0, "the official URL was never used");
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Draws a line the way a download does, into a terminal that keeps it, so
@@ -977,7 +991,7 @@ mod tests {
     /// the screen - and being barless, it also cannot be split into ranges.
     #[test]
     fn a_source_that_hides_its_length_draws_a_line_without_a_total() {
-        let root = temp_dir("hidden-length");
+        let root = Scratch::new("hidden-length");
         let payload = payload();
         let server = Server::start_hiding_length(Arc::clone(&payload));
         let path = root.join("archive.downloading");
@@ -1008,7 +1022,6 @@ mod tests {
             server.first_range().is_none(),
             "a length-less transfer cannot be cut into ranges"
         );
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// The fix for that line: the size the index publishes is what the bar's
@@ -1016,7 +1029,7 @@ mod tests {
     /// known before the first byte, not guessed from a response.
     #[test]
     fn a_published_size_puts_the_total_back_on_the_line() {
-        let root = temp_dir("known-length");
+        let root = Scratch::new("known-length");
         let payload = payload();
         let server = Server::start_hiding_length(Arc::clone(&payload));
         let path = root.join("archive.downloading");
@@ -1044,7 +1057,6 @@ mod tests {
             "the published total is missing: {drawn:?}"
         );
         assert_eq!(progress.total(), TOTAL as u64);
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// The length is also what the chunked pass needs, so a published size brings
@@ -1057,7 +1069,7 @@ mod tests {
         // A name that is not `zig-*.zip` keeps the mirror probing out of a test
         // that only talks to 127.0.0.1.
         let unknown = Server::start_hiding_length(Arc::clone(&payload));
-        let root = temp_dir("size-unknown");
+        let root = Scratch::new("size-unknown");
         let output = root.join("archive.zip");
         let temporary = root.join("archive.downloading");
         run(download_async(Transfer {
@@ -1077,10 +1089,9 @@ mod tests {
             "a length-less transfer was chunked"
         );
         assert_eq!(unknown.calls(), 2, "a HEAD and one stream");
-        std::fs::remove_dir_all(root).unwrap();
 
         let known = Server::start_hiding_length(Arc::clone(&payload));
-        let root = temp_dir("size-known");
+        let root = Scratch::new("size-known");
         let output = root.join("archive.zip");
         let temporary = root.join("archive.downloading");
         run(download_async(Transfer {
@@ -1100,7 +1111,6 @@ mod tests {
             "the published size was not used to split the transfer"
         );
         assert!(known.calls() > 3, "{} requests", known.calls());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A mirror that cannot serve chunks is passed over for the chunked pass
