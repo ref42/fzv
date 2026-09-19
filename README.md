@@ -47,7 +47,7 @@ cargo install --git https://github.com/ref42/fzv
 
 ### 三、手动
 
-从 Release 下载 `fzv-v*-windows-x86_64.zip`，把里面的 `fzv.exe` 放进任意一个已在 PATH 里的目录。
+从 Release 下载 `fzv-v*-windows-x86_64.zip`，解压后把 fzv 加到 `PATH` 里。
 
 ## 命令
 
