@@ -5,7 +5,7 @@
 ```bash
 fzv get dev, stable -path path/to/save/zig   # 把最新的 dev 和 stable 装到指定目录
 fzv get dev -j 4                             # 4 条连接下载（默认 8，-j 1 是单流）
-fzv use 0.16.0                               # 切到 0.16.0，开着的终端、IDE、cargo / zig build 立刻用新版
+fzv use 0.16.0                               # 切到 0.16.0，zig build 立刻用新版
 fzv use dev                                  # 切到最新开发快照
 fzv lls                                      # 本机装了哪些版本
 fzv rm dev -yes                              # 删除
