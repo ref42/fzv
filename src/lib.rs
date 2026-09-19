@@ -1,4 +1,4 @@
-//! fzv - manage the Zig version your `PATH` points at.
+//! fzv - manage the Zig version your `PATH` points at (Windows).
 //!
 //! # Layers
 //!
@@ -7,13 +7,13 @@
 //!     cli/             argument parsing, prompts, per-command behaviour
 //!       commands/      one module per fzv command
 //!     install/         downloading, verifying and unpacking a version
-//!       archive.rs     zip / tar.xz extraction with guard rails
+//!       archive.rs     .zip extraction with guard rails
 //!       checksum.rs    SHA-256 verification of downloads
 //!     index.rs         the ziglang.org download index and its cache
 //!     installed.rs     what is installed in a versions directory
 //!     layout.rs        finding and flattening an installed executable
 //!     version.rs       the Version type (parsing and ordering)
-//!     platform/        OS differences: Windows registry vs Unix symlink
+//!     platform.rs      Windows integration: the user PATH in the registry
 //!     path_util.rs     pure PATH rewriting rules
 //!     download/        HTTP transport, mirrors, progress
 //!     store.rs         where fzv's own files live
@@ -23,14 +23,10 @@
 //!
 //! # The one invariant
 //!
-//! The active version *is* the Zig directory in `PATH`:
-//!
-//! * Windows rewrites `HKCU\Environment\Path`, so the version directory itself
-//!   is the entry;
-//! * Unix points a `zig` symlink inside a directory on `PATH` at it.
-//!
-//! Nothing else records the selection, so fzv cannot drift out of sync with the
-//! shell, and every fzv file lives inside the versions directory (`<versions>/.fzv`).
+//! The active version *is* the Zig directory in `HKCU\Environment\Path`: `fzv use`
+//! replaces that single entry with `<versions>\<version>`. Nothing else records
+//! the selection, so fzv cannot drift out of sync with the shell, and every fzv
+//! file lives inside the versions directory (`<versions>\.fzv`).
 
 pub mod cli;
 pub mod download;

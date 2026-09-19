@@ -24,11 +24,7 @@ pub fn find_zig_executable(root: &Path) -> Result<PathBuf> {
 
 /// The file name of `name` on this platform.
 pub fn executable_name(name: &str) -> String {
-    if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    }
+    format!("{name}.exe")
 }
 
 fn find_at(directory: &Path, wanted: &str, depth: usize) -> Result<PathBuf> {

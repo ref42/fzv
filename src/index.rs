@@ -197,45 +197,36 @@ pub fn download_info(version: &Version, root: &Path) -> Result<Archive> {
 
 /// The `{arch}-{platform}` key the index uses for this machine.
 pub fn platform_key() -> Result<&'static str> {
-    Ok(
-        match (
-            cfg!(windows),
-            cfg!(target_os = "macos"),
-            cfg!(target_arch = "x86_64"),
-            cfg!(target_arch = "aarch64"),
-        ) {
-            (true, _, true, _) => "x86_64-windows",
-            (true, _, _, true) => "aarch64-windows",
-            (_, true, true, _) => "x86_64-macos",
-            (_, true, _, true) => "aarch64-macos",
-            (_, _, true, _) => "x86_64-linux",
-            (_, _, _, true) => "aarch64-linux",
-            _ => return Err(err!("unsupported CPU architecture for Zig")),
-        },
-    )
+    if cfg!(target_arch = "x86_64") {
+        Ok("x86_64-windows")
+    } else if cfg!(target_arch = "aarch64") {
+        Ok("aarch64-windows")
+    } else {
+        Err(err!("unsupported CPU architecture for Zig"))
+    }
 }
 
 /// The archive URL for a version the index does not describe, derived from Zig's
-/// published naming conventions.
+/// published naming conventions. Windows builds are always `.zip`.
 pub fn constructed_archive(version: &Version, platform: &str) -> Result<(String, String)> {
-    let (arch, os) = platform
+    let arch = platform
         .split_once('-')
+        .map(|(arch, _)| arch)
         .ok_or_else(|| err!("invalid platform key '{platform}'"))?;
-    let ext = if os == "windows" { "zip" } else { "tar.xz" };
     let text = version.as_str();
     // Development snapshots are published in /builds, not under the versioned
     // release directories.
     if text.contains("-dev.") || text.contains("-rc.") {
-        let archive = format!("zig-{arch}-{os}-{text}.{ext}");
+        let archive = format!("zig-{arch}-windows-{text}.zip");
         return Ok((format!("https://ziglang.org/builds/{archive}"), archive));
     }
     // Zig changed release archive naming from OS-ARCH to ARCH-OS in 0.14.1.
     let layout = if *version < Version::parse("0.14.1").expect("valid version") {
-        format!("{os}-{arch}")
+        format!("windows-{arch}")
     } else {
-        format!("{arch}-{os}")
+        format!("{arch}-windows")
     };
-    let archive = format!("zig-{layout}-{text}.{ext}");
+    let archive = format!("zig-{layout}-{text}.zip");
     Ok((
         format!("https://ziglang.org/download/{text}/{archive}"),
         archive,
@@ -313,7 +304,7 @@ mod tests {
             .expect("entry");
         assert_eq!(archive.2, None);
         // Unknown version or platform.
-        assert!(index.find_archive("0.14.1", "aarch64-linux").is_none());
+        assert!(index.find_archive("0.14.1", "aarch64-windows").is_none());
         assert!(index.find_archive("0.99.0", "x86_64-windows").is_none());
     }
 
@@ -329,12 +320,13 @@ mod tests {
         assert_eq!(archive, "zig-x86_64-windows-0.14.1.zip");
 
         let dev = Version::parse("0.17.0-dev.2228+955228b68").unwrap();
-        let (url, archive) = constructed_archive(&dev, "x86_64-linux").unwrap();
-        assert_eq!(archive, "zig-x86_64-linux-0.17.0-dev.2228+955228b68.tar.xz");
+        let (url, archive) = constructed_archive(&dev, "x86_64-windows").unwrap();
+        assert_eq!(archive, "zig-x86_64-windows-0.17.0-dev.2228+955228b68.zip");
         assert_eq!(url, format!("https://ziglang.org/builds/{archive}"));
 
-        let old = Version::parse("0.13.0").unwrap();
-        let (_, archive) = constructed_archive(&old, "aarch64-macos").unwrap();
-        assert_eq!(archive, "zig-macos-aarch64-0.13.0.tar.xz");
+        // The aarch64 layout is derived from the platform key.
+        let (_, archive) =
+            constructed_archive(&Version::parse("0.13.0").unwrap(), "aarch64-windows").unwrap();
+        assert_eq!(archive, "zig-windows-aarch64-0.13.0.zip");
     }
 }

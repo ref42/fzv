@@ -1,9 +1,10 @@
 //! Pure path and `PATH` handling.
 //!
-//! The rules that decide which environment entry belongs to fzv are subtle
-//! enough that they are worth testing on every platform, so nothing here talks
-//! to the registry, the process environment or the shell: the few places where
-//! Windows and Unix differ are passed in as a [`PathStyle`].
+//! fzv runs on Windows, so the rules here are the Windows ones: `;`-separated
+//! `PATH` values, either separator inside a path, case-insensitive comparison,
+//! and protection against touching unrelated entries. They are kept free of any
+//! registry or environment access — the platform layer passes the raw value in —
+//! which also makes them directly testable.
 
 use std::path::{Path, PathBuf};
 
@@ -19,6 +20,7 @@ pub struct PathStyle {
 }
 
 impl PathStyle {
+    /// The conventions fzv runs with: Windows `PATH` values.
     pub fn windows() -> Self {
         PathStyle {
             separator: ';',
@@ -27,20 +29,13 @@ impl PathStyle {
         }
     }
 
+    /// The Unix conventions, kept so that the rules below stay exercised (and
+    /// documented) by tests even though only the Windows backend ships.
     pub fn unix() -> Self {
         PathStyle {
             separator: ':',
             native_separator: '/',
             windows: false,
-        }
-    }
-
-    /// The style of the platform this binary is running on.
-    pub fn current() -> Self {
-        if cfg!(windows) {
-            PathStyle::windows()
-        } else {
-            PathStyle::unix()
         }
     }
 }

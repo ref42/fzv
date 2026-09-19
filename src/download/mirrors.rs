@@ -41,8 +41,9 @@ pub(super) async fn select_download_source(
     let Some(filename) = output.file_name().and_then(|name| name.to_str()) else {
         return (official_url.to_string(), false, None);
     };
+    // Only Zig archives are mirrored; the index and the ZLS release are not.
     if !filename.starts_with("zig-")
-        || !(filename.ends_with(".zip") || filename.ends_with(".tar.xz"))
+        || !filename.ends_with(".zip")
         || env::var_os("FZV_NO_MIRRORS").is_some()
     {
         return (official_url.to_string(), false, None);

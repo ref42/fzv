@@ -55,7 +55,7 @@ impl Options {
 /// which silently turns `D:\zig` into the drive-relative `D:zig`; that is
 /// reported with the fix rather than accepted as a different directory.
 pub fn parse_directory_argument(value: &str) -> Result<PathBuf> {
-    let style = PathStyle::current();
+    let style = PathStyle::windows();
     // Scripts and `Start-Process` can hand the quotes through literally.
     let text = path_util::unquote(value.trim());
     if text.is_empty() {
@@ -110,12 +110,8 @@ mod tests {
     #[test]
     fn explains_shell_mangled_paths() {
         let error = parse_directory_argument("D:PL_Collectionszig").unwrap_err();
-        if cfg!(windows) {
-            assert!(error.to_string().contains("drive-relative"), "{error}");
-            assert!(error.to_string().contains("Quote the value"), "{error}");
-        } else {
-            assert!(error.to_string().contains("not an absolute path"), "{error}");
-        }
+        assert!(error.to_string().contains("drive-relative"), "{error}");
+        assert!(error.to_string().contains("Quote the value"), "{error}");
 
         // A relative path gets a plain error, without the shell lecture.
         let error = parse_directory_argument("zig-versions").unwrap_err();
@@ -125,7 +121,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(windows)]
     fn accepts_both_separators_and_wrapping_quotes() {
         for value in [
             r"D:\PL_Collections\zig",
@@ -142,15 +137,5 @@ mod tests {
         }
         // A verbatim path pasted from a message works too.
         assert!(parse_directory_argument(r"\\?\D:\PL_Collections\zig").is_ok());
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn accepts_unix_paths() {
-        assert_eq!(
-            parse_directory_argument("/home/u/zig").unwrap(),
-            PathBuf::from("/home/u/zig")
-        );
-        assert!(parse_directory_argument("zig").is_err());
     }
 }

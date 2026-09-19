@@ -83,13 +83,7 @@ pub fn ensure_zls(root: &Path) -> Result<PathBuf> {
     } else {
         return Err(err!("unsupported CPU architecture for ZLS"));
     };
-    let archive = if cfg!(windows) {
-        format!("zls-{zls_arch}-windows.zip")
-    } else if cfg!(target_os = "macos") {
-        format!("zls-{zls_arch}-macos.tar.xz")
-    } else {
-        format!("zls-{zls_arch}-linux.tar.xz")
-    };
+    let archive = format!("zls-{zls_arch}-windows.zip");
     let url = format!("https://github.com/zigtools/zls/releases/latest/download/{archive}");
     let archive_path = directory.join(&archive);
     if !archive_path.is_file() {

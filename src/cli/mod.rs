@@ -102,9 +102,9 @@ Manage Zig versions that are switched by a single entry in your PATH.
 Selectors: latest, stable, master, or an exact version.
 
 How it works:
-  * 'fzv use <version>' makes '<versions>\\<version>' the Zig directory in your
-    PATH (on Unix, by pointing a `zig` symlink there); that is the active
-    version, so fzv keeps no other record of it.
+  * 'fzv use <version>' replaces the fzv Zig directory in your user PATH with
+    '<versions>\\<version>'; that PATH entry is the active version, so fzv keeps
+    no other record of it.
   * The versions directory is taken from '--path DIR' when given, otherwise
     from the Zig directory already in PATH.
   * With '--path DIR', 'get' installs there and then activates the newest of
@@ -119,8 +119,7 @@ Environment:
   FZV_MIRROR                 download from a single mirror (for example https://example.org/zig)
   FZV_NO_MIRRORS             always download from ziglang.org
   FZV_DOWNLOAD_JOBS          number of parallel download segments (default 8)
-  FZV_REFRESH_INDEX          ignore the cached download index
-  FZV_BIN_DIR                (Unix) directory holding fzv's `zig` symlink"
+  FZV_REFRESH_INDEX          ignore the cached download index"
     );
 }
 
